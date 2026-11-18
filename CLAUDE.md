@@ -42,7 +42,7 @@ Detailed technical specification (v2.0): [`docs/PROJECT_BRIEF.md` §5](docs/PROJ
 - **Target hardware:** NVIDIA RTX 4060 Laptop (8 GB VRAM).
 - **No Training From Scratch:** Freeze heavy backbones. Sole exception: the ~1.2M-parameter Frequency CNN of Expert 3.
 - **Feature Caching:** Extract and cache embeddings to `data/cache/` (`.pt` float16 or `.parquet`) so gating and calibration run in seconds on local CPU/GPU.
-- **Tiny-First Rule:** Every module must pass `pytest` on `data/toy/` (100 samples) in under 15 seconds.
+- **Tiny-First Rule:** Every module's tests (e.g. `pytest tests/test_data_*`) must pass on `data/toy/` (100 samples) in under 15 seconds. The budget is per module, not for the whole suite (pytest + torch import alone costs ~2.5 s on this machine). Decided by the user on 2026-11-18.
 
 ## 4. Multi-Agent Workflow (Orchestration)
 The user assigns tasks to the main session. The main session acts as **orchestrator**: it breaks the task down, delegates each part to the subagent that owns the relevant folders, verifies the results, and reports back.

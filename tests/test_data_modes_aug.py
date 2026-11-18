@@ -52,9 +52,8 @@ def test_unknown_mode_rejected(tmp_path, cfg):
         normalize_image(src, tmp_path / "o.png", is_real=True, cfg=_cfg_mode(cfg, "bogus"))
 
 
-def test_toy_resize_crop_pipeline_and_audit_per_generator(tmp_path, cfg):
-    from src.data.toy import build_toy
-    man = build_toy(tmp_path / "t", _cfg_mode(cfg, "resize_crop"))
+def test_toy_resize_crop_pipeline_and_audit_per_generator(toy_manifest_resize_crop, cfg):
+    man = toy_manifest_resize_crop
     sizes = {Image.open(man.abs_path(r)).size for r in man.records if r.is_clean}
     assert sizes == {(224, 224)}
     assert all(r.provenance["normalize_mode"] == "resize_crop" for r in man.records if r.is_clean)
@@ -83,7 +82,7 @@ def test_audit_full_flags_generator_shortcut(toy_manifest, cfg, monkeypatch):
     assert full["passed"] is False and full["status"] == "fail"
 
 
-def _raw_tree(root: Path, n=6):
+def _raw_tree(root: Path, n=3):
     rng = np.random.default_rng(1)
     for gen in ("adm", "sd_v1_4", "midjourney", "glide"):
         for kind in ("ai", "nature"):
@@ -97,7 +96,8 @@ def _raw_tree(root: Path, n=6):
 def test_cli_modes_separate_dirs_and_recorded(tmp_path, cfg):
     tree = tmp_path / "raw"
     _raw_tree(tree)
-    split_cfg = deep_merge(cfg, {"split": cfg["toy"]["split_overrides"]})
+    from tests.conftest import no_variants
+    split_cfg = no_variants(deep_merge(cfg, {"split": cfg["toy"]["split_overrides"]}))
     cp = tmp_path / "c.yaml"
     cp.write_text(yaml.safe_dump(split_cfg))
     outs = {}
