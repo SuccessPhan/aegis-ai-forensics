@@ -146,3 +146,22 @@ Audit (LR chỉ trên 3 đặc trưng chất lượng, ảnh sạch, 16.000 ản
 1. Dùng **`resize_crop`**.
 2. Trên dữ liệu thật, audit **được báo cáo** theo từng generator (cả seen lẫn unseen), không còn là cổng chặn cứng. Thêm baseline **`quality_only`** (cùng LR trên 3 đặc trưng chất lượng, fit trên `val_gating_fit`) vào mọi bảng ablation làm **mức sàn**: mọi phương pháp phải vượt xa mức này. Ghi rõ hạn chế của ADM trong báo cáo.
 3. **Cân bằng 50/50 Real/AI trong mọi split** (ảnh Real được phân bổ theo số ảnh AI của từng split; trước đó Real nhiều gấp ~1,8 lần do ảnh Real từ thư mục Midjourney/GLIDE dồn vào các tập seen). 137 ảnh Real nhỏ hơn 224 px bị loại.
+
+## 8. Kết quả thật đầu tiên & chẩn đoán (2026-11-18)
+
+Nguồn: `reports/v1` (ablation), `reports/v2` (bootstrap CI theo cụm ảnh gốc, B=2000; phân tích trọng số). v2 khớp v1 từng byte.
+
+**Đã có ý nghĩa thống kê (CI 95% không chứa 0):**
+- S3 (head clean): AEGIS > mọi baseline (+0.023 AUROC vs Static LR, +0.022 vs DINOv2).
+- S4 Midjourney, N ≥ 20: AEGIS > Static LR + support (cùng ngân sách nhãn) ở cả hai head (+0.011 → +0.016).
+- S1/S2: AEGIS ≈ Static LR (không khác biệt có ý nghĩa). Không được viết "vượt trội" cho S1/S2.
+- CLIP đơn lẻ rất mạnh; ở S4 Midjourney head clean N=100, AEGIS thua CLIP nhẹ có ý nghĩa (−0.004).
+
+**Trọng số (val_gating_verify):** khi blur tăng, trọng số chuyển CLIP → DINOv2 (đúng với AUROC từng expert); head aug: w_freq giảm đơn điệu khi JPEG Q giảm (0.35 → 0.14), khớp AUROC freq giảm.
+
+**Chẩn đoán (chỉ để hiểu, không dùng chọn mô hình):**
+1. Giả thuyết "đặc trưng chất lượng nhầm JPEG với blur" **bị bác bỏ**: phân biệt JPEG vs blur AUROC 0.94–0.97; nhầm JPEG→blur chỉ 0,5%.
+2. Trộn CLIP + DINOv2 dưới JPEG nặng **có lợi** (Q40 head clean: AEGIS 0.869 > CLIP 0.840) — không phải định tuyến sai.
+3. **Mức trần oracle** (trọng số cố định tốt nhất cho từng mức suy giảm, dò trên chính lát test — cận trên lạc quan): AEGIS cách oracle chỉ 0.001–0.011 AUROC ở mọi mức S1–S3. ⇒ Bộ điều phối đã gần tối ưu trong họ "trung bình có trọng số"; giới hạn còn lại nằm ở **chất lượng expert**, không ở định tuyến. Cải tiến bộ đo JPEG bị loại bỏ vì dư địa < 0.01.
+
+**Lưu ý toàn vẹn:** `test_benchmark` đã được xem ở v1/v2. Mọi thay đổi hệ thống từ đây phải được chọn **chỉ trên `val_gating_verify`** và phải ghi rõ trong báo cáo là đã có một vòng xem kết quả test trước khi thay đổi.
