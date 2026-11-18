@@ -84,7 +84,7 @@ experts:
     model_id: "facebook/dinov2-base"
     feature_dim: 768
   freq:
-    input: "log_magnitude_fft"                    # alternative: "srm"
+    input: "srm"                                  # chosen on val_gating_fit (brief §6): srm AUROC 0.978 vs log_magnitude_fft 0.943 (clean heads), see data/cache/freq_selection.json
     channels: [32, 64, 128, 256]                  # 4 blocks; target ~1.2M params (brief 5.2)
     train:                                        # ASSUMPTION: initial values
       epochs: 10
