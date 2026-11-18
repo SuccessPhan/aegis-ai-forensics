@@ -21,16 +21,19 @@ def _img(path: Path, seed: int, fmt: str):
     Image.fromarray(arr).save(path, format=fmt)
 
 
-@pytest.fixture
-def tree(tmp_path):
-    root = tmp_path / "genimage"
+def _make_tree(root: Path, n: int) -> Path:
     for gi, gen in enumerate(GENS + ["biggan"]):
-        for i in range(N):
+        for i in range(n):
             _img(root / gen / "ai" / f"{i}.png", 1000 * gi + i, "PNG")
             _img(root / gen / "nature" / f"{i}.JPEG", 100 * gi + i + 50000, "JPEG")
     # the same Real image under two different generators
     shutil.copy(root / "adm" / "nature" / "0.JPEG", root / "glide" / "nature" / "dup.JPEG")
     return root
+
+
+@pytest.fixture
+def tree(tmp_path):
+    return _make_tree(tmp_path / "genimage", N)
 
 
 def test_scan_filters_and_extensions(tree, cfg):
@@ -61,14 +64,17 @@ def test_missing_and_empty_root(tmp_path, cfg):
     assert main(["--root", str(tmp_path / "nope"), "--out", str(tmp_path / "o")]) == 2
 
 
-def test_cli_end_to_end(tree, tmp_path, cfg):
+def test_cli_end_to_end(tmp_path, cfg):
+    n = 4                                   # smallest tree that still yields real in train/val/test and S4 pools
+    tree = _make_tree(tmp_path / "genimage", n)
     cfg_path = tmp_path / "c.yaml"
-    cfg_path.write_text(yaml.safe_dump(deep_merge(cfg, {"split": cfg["toy"]["split_overrides"]})))
+    from tests.conftest import no_variants
+    cfg_path.write_text(yaml.safe_dump(no_variants(deep_merge(cfg, {"split": cfg["toy"]["split_overrides"]}))))
     out = tmp_path / "norm"
     assert main(["--root", str(tree), "--out", str(out), "--config", str(cfg_path)]) == 0
     man = SplitManifest.load(out / "manifest.json")
     clean = [r for r in man.records if r.is_clean]
-    assert len(clean) == 4 * 2 * N          # the duplicated Real was dropped
+    assert len(clean) == 4 * 2 * n          # the duplicated Real was dropped
     assert not any(r.generator == "biggan" for r in man.records)
     assert all(r.generator == "real" for r in clean if r.label == LABEL_REAL)
     # unseen generators only in S4 pools; Real from unseen dirs is ordinary Real (main splits possible)
