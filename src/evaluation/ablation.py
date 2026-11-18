@@ -24,6 +24,7 @@ from src.core.config import Config
 from src.core.contracts import EXPERT_NAMES
 from src.core.logger import get_logger
 from src.evaluation.metrics import compute_metrics
+from src.evaluation.predictions import PredictionSink, group_key
 from src.learning.baselines import NaiveAverage, QualityOnly, SingleExpert, StaticLearnedWeights
 from src.learning.bundle_io import Bundle
 from src.learning.features import FeaturePipeline
@@ -59,8 +60,11 @@ class _System:
 
 
 def _row(sysm: _System, method: str, model: Any, b: Bundle, fs, scenario: str, level: str, N: Optional[int],
-         variant: str):
+         variant: str, generator: Optional[str] = None, seed: Optional[int] = None):
     p = model.predict_bundle(b) if hasattr(model, "predict_bundle") else model.predict(fs)
+    if getattr(sysm, "sink", None) is not None:          # --save-predictions: record per-sample outputs
+        w = model.weights(fs) if method in ("aegis", "aegis_noadapt") else None
+        sysm.sink.add(group_key(variant, scenario, level, generator, N, seed), method, b.sha256, b.label, p, w)
     flags, _ = compute_flags(fs.p, p, fs.mean_ood, sysm.thr, sysm.cfg)
     return compute_metrics(b.label, p, sysm.cfg, scenario, method, flags,
                            {"level": level, "N": N, "variant": variant})
@@ -108,11 +112,12 @@ def _slices(test: Bundle):
 def run_ablation(cfg: Config, fit: Bundle, test: Bundle, s4_support: Optional[Bundle] = None,
                  s4_eval: Optional[Bundle] = None, out_dir: Optional[str | Path] = None,
                  s4_seeds: Optional[Sequence[int]] = None, n_values: Optional[Sequence[int]] = None,
-                 head_variant: Optional[str] = None, s4_generators: Optional[Sequence[str]] = None
-                 ) -> List[Dict[str, Any]]:
+                 head_variant: Optional[str] = None, s4_generators: Optional[Sequence[str]] = None,
+                 sink: Optional[PredictionSink] = None) -> List[Dict[str, Any]]:
     """`fit` = val_gating_fit bundle, `test` = test_benchmark bundle (read once, here).
     S4 is reported per unseen generator (support = N/2 AI of that generator + N/2 Real; eval = that generator + Real)
-    plus a pooled row group (generator='all'). `s4_generators` defaults to the AI generators found in s4_eval."""
+    plus a pooled row group (generator='all'). `s4_generators` defaults to the AI generators found in s4_eval.
+    `sink` (optional PredictionSink) records per-sample predictions of every evaluated method (no effect on results)."""
     seed = cfg.get("seed", 0)
     s4_seeds = list(s4_seeds) if s4_seeds else [seed]
     n_values = list(n_values) if n_values else cfg["fewshot"]["n_values"]
@@ -120,6 +125,7 @@ def run_ablation(cfg: Config, fit: Bundle, test: Bundle, s4_support: Optional[Bu
     reports = []
     for vname, (cal, ood) in variants.items():
         sysm = _System(cfg, fit, cal, ood, seed)
+        sysm.sink = sink
         methods = METHODS if vname in ("full", "nocal") else ("aegis",)
         for sc, lvl, b in _slices(test):
             fs = sysm.pipe.transform(b)
@@ -180,7 +186,7 @@ def _s4_reports(cfg, sysm, vname, methods, s4_support, ev, gname, gen, n_values,
     fs_eval = sysm.pipe.transform(ev)
     for m in methods:
         if m != "aegis":
-            reports.append(_row(sysm, m, sysm.models[m], ev, fs_eval, "S4", "all", None, vname))
+            reports.append(_row(sysm, m, sysm.models[m], ev, fs_eval, "S4", "all", None, vname, gname))
     for n in n_values:
         per_seed, per_seed_sl = [], []
         for s in s4_seeds:
@@ -188,17 +194,17 @@ def _s4_reports(cfg, sysm, vname, methods, s4_support, ev, gname, gen, n_values,
             sup_fs = sysm.pipe.transform(sup)
             shas = [str(x) for x in sup.sha256]
             res = adapt(sysm.gating, sysm.fit_fs, sysm.fit_y, sup_fs, sup.label, cfg, seed=s)
-            per_seed.append(_row(sysm, "aegis", res.model, ev, fs_eval, "S4", "all", n, vname))
+            per_seed.append(_row(sysm, "aegis", res.model, ev, fs_eval, "S4", "all", n, vname, gname, s))
             per_seed[-1].extras.update(regime=res.regime, support_sha256={s: shas})
             if vname in ("full", "nocal"):
                 # fair baseline: same support set (same seed/sample), same support_repeat as AEGIS refit
                 sl = fit_static_with_support(sysm.fit_fs, sysm.fit_y, sup_fs, sup.label, cfg)
-                per_seed_sl.append(_row(sysm, "static_learned_support", sl, ev, fs_eval, "S4", "all", n, vname))
+                per_seed_sl.append(_row(sysm, "static_learned_support", sl, ev, fs_eval, "S4", "all", n, vname, gname, s))
                 per_seed_sl[-1].extras["support_sha256"] = {s: shas}
         reports.append(_mean_reports(per_seed))
         if per_seed_sl:
             reports.append(_mean_reports(per_seed_sl))
-    reports.append(_row(sysm, "aegis_noadapt", sysm.gating, ev, fs_eval, "S4", "all", 0, vname))
+    reports.append(_row(sysm, "aegis_noadapt", sysm.gating, ev, fs_eval, "S4", "all", 0, vname, gname))
     for r in reports:
         r.extras["generator"] = gname
     return reports
@@ -341,10 +347,11 @@ class MissingBundlesError(FileNotFoundError):
 
 
 def run_all(cfg: Config, head_variants: Optional[Sequence[str]] = None, out_dir: str | Path = "reports",
-            s4_seeds: Optional[Sequence[int]] = None) -> List[Dict[str, Any]]:
+            s4_seeds: Optional[Sequence[int]] = None, save_predictions: bool = False) -> List[Dict[str, Any]]:
     """Load bundles, fit on val_gating_fit, evaluate test_benchmark once per head variant, write tables.
     head_variants None -> every variant in DEFAULT_VARIANTS that has a bundle directory; legacy flat layout
-    (bundles/<split>.pt, head_variant=None) when none exists."""
+    (bundles/<split>.pt, head_variant=None) when none exists. save_predictions=True additionally writes
+    <out_dir>/predictions/predictions_<head_variant>.npz (format: see src.evaluation.predictions)."""
     from src.learning.bundle_io import bundle_path, load_split
     if head_variants:
         hvs: List[Optional[str]] = list(head_variants)
@@ -356,8 +363,11 @@ def run_all(cfg: Config, head_variants: Optional[Sequence[str]] = None, out_dir:
     rows: List[Dict[str, Any]] = []
     for hv in hvs:
         b = {s: load_split(cfg, s, hv) for s in REQUIRED_SPLITS}
+        sink = PredictionSink() if save_predictions else None
         rows += run_ablation(cfg, b["val_gating_fit"], b["test_benchmark"], b["s4_support"], b["s4_eval"],
-                             s4_seeds=s4_seeds, head_variant=hv)
+                             s4_seeds=s4_seeds, head_variant=hv, sink=sink)
+        if sink is not None:
+            sink.save(Path(out_dir) / "predictions" / f"predictions_{hv or 'default'}.npz")
     write_tables(rows, out_dir)
     return rows
 
@@ -370,13 +380,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--out", default=str(REPO_ROOT / "reports"))
     ap.add_argument("--config", default=None)
     ap.add_argument("--s4-seeds", nargs="+", type=int, default=None)
+    ap.add_argument("--save-predictions", action="store_true",
+                    help="also write per-sample predictions (<out>/predictions/predictions_<variant>.npz)")
     a = ap.parse_args(argv)
     cfg = load_config(a.config)
     out = a.out or str(resolve_path(cfg, "reports_dir") if "reports_dir" in cfg.get("paths", {})
                        else REPO_ROOT / "reports")
     hvs = a.head_variants or (cfg.get("evaluation") or {}).get("head_variants") or None
     try:
-        run_all(cfg, hvs, out, a.s4_seeds)
+        run_all(cfg, hvs, out, a.s4_seeds, a.save_predictions)
     except MissingBundlesError as e:
         log.error("%s", e)
         return 2
