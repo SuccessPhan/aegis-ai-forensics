@@ -97,3 +97,48 @@ def test_split_deterministic(toy_manifest, cfg):
     toy_cfg["split"] = {**cfg["split"], **{"s4": {**cfg["split"]["s4"], **cfg["toy"]["split_overrides"]["s4"]}}}
     a = assign_splits(copy.deepcopy(clean), toy_cfg, seed=cfg["seed"])
     assert {r.sha256: r.split for r in a.records} == {r.sha256: r.split for r in clean}
+
+
+def _toy_cfg(cfg, **split_extra):
+    c = copy.deepcopy(cfg)
+    c["split"] = {**cfg["split"], **split_extra, "s4": {**cfg["split"]["s4"], **cfg["toy"]["split_overrides"]["s4"]}}
+    return c
+
+
+def _table(man):
+    from src.data.split import split_label_table
+    return split_label_table(man)
+
+
+def test_balance_real_every_split_5050_on_toy(toy_manifest):
+    from src.core.contracts import ALL_SPLITS
+    tab = _table(toy_manifest)
+    for s in ALL_SPLITS:
+        assert tab[s]["ai"] > 0 and tab[s]["real"] == tab[s]["ai"], (s, tab[s])
+
+
+def test_balance_real_shortfall_comes_out_of_s4_eval(toy_manifest, cfg, caplog):
+    clean = copy.deepcopy([r for r in toy_manifest.records if r.is_clean])
+    real = [r for r in clean if r.label == 0]
+    drop = {id(r) for r in real[:7]}                     # 7 fewer Real than AI
+    short = [r for r in clean if id(r) not in drop]
+    with caplog.at_level("WARNING"):
+        man = assign_splits(short, _toy_cfg(cfg))
+    tab = _table(man)
+    full = _table(toy_manifest)
+    for s in tab:
+        if s != SPLIT_S4_EVAL:
+            assert tab[s]["real"] == tab[s]["ai"], s
+    assert tab[SPLIT_S4_EVAL]["real"] == full[SPLIT_S4_EVAL]["real"] - 7
+    assert "short" in caplog.text and check_no_leakage(man, cfg) == []
+
+
+def test_balance_real_drops_surplus_and_flag_off_keeps_old_behaviour(toy_manifest, cfg):
+    clean = [r for r in toy_manifest.records if r.is_clean]
+    extra = copy.deepcopy([r for r in clean if r.label == 0][:5])
+    for i, r in enumerate(extra):
+        r.sha256, r.source_group_id = f"x{i}" * 16, f"extra{i}"
+    man = assign_splits(copy.deepcopy(clean) + extra, _toy_cfg(cfg))
+    assert sum(r.label == 0 for r in man.records) == 50          # surplus Real removed, still balanced
+    off = assign_splits(copy.deepcopy(clean) + extra, _toy_cfg(cfg, balance_real=False))
+    assert sum(r.label == 0 for r in off.records) == 55

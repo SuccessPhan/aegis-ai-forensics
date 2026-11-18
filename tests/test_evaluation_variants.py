@@ -1,6 +1,7 @@
 import csv
 import warnings
 
+import numpy as np
 import pytest
 
 from src.core.config import load_config
@@ -64,7 +65,9 @@ def test_s4_split_per_generator_with_correct_support(cfg, two_variant_rows):
             shas = r["support_sha256"][cfg["seed"]]
             idx = {s: i for i, s in enumerate(sup.sha256)}
             sel = [idx[s] for s in shas]
-            assert shas == [str(x) for x in select_support(sup, r["N"], cfg["seed"], generator=g).sha256]
+            part = ab._gen_bundle(sup, g, ab.partition_real(sup, ["glide", "midjourney"], cfg["seed"],
+                                                            clean_only=True)[g])
+            assert shas == [str(x) for x in select_support(part, r["N"], cfg["seed"], generator=g).sha256]
             assert sum(sup.label[i] == 1 for i in sel) == (r["N"] + 1) // 2
             assert {sup.generator[i] for i in sel if sup.label[i] == 1} == {g}
             assert sum(sup.label[i] == 0 for i in sel) == r["N"] // 2
@@ -112,3 +115,53 @@ def test_mean_reports_all_nan_no_warning():
         warnings.simplefilter("error")
         r = ab._mean_reports(reps)
     assert r.auroc != r.auroc and r.extras["n_seeds"] == 2
+
+
+def test_quality_only_floor_everywhere_and_not_best_baseline(two_variant_rows):
+    rows = two_variant_rows
+    for hv in ("clean", "aug"):
+        for key in {(r["scenario"], r["level"], r["generator"]) for r in rows if r["head_variant"] == hv}:
+            assert any(r["method"] == "quality_only" and r["variant"] == "full" and r["head_variant"] == hv
+                       and (r["scenario"], r["level"], r["generator"]) == key for r in rows), key
+    assert {r["scenario"] for r in rows if r["method"] == "quality_only"} == {"S1", "S2", "S4"}
+    summ = ab.summarize_best_baseline(rows)
+    assert summ and all(not r["best_baseline"].startswith("quality_only") for r in summ)
+    assert all(r["floor_auroc"] is not None for r in summ)
+    assert all(r["aegis_minus_floor"] == pytest.approx(r["aegis_auroc"] - r["floor_auroc"]) for r in summ)
+
+
+def test_summary_excludes_floor_even_if_strongest():
+    rows = [_row("clean", "aegis", 0.90), _row("clean", "dinov2", 0.85), _row("clean", "quality_only", 0.99)]
+    s = ab.summarize_best_baseline(rows)[0]
+    assert s["best_baseline"].startswith("dinov2") and s["floor_auroc"] == 0.99
+    assert s["aegis_minus_floor"] == pytest.approx(-0.09)
+
+
+def test_partition_real_disjoint_sized_deterministic():
+    _, _, _, ev = _bundles(1)
+    gens = ["glide", "midjourney"]
+    part = ab.partition_real(ev, gens, 0)
+    n_ai = {g: sum(1 for lb, x in zip(ev.label, ev.generator) if lb == 1 and x == g) for g in gens}
+    n_real = int((ev.label == 0).sum())
+    assert set(part["glide"]).isdisjoint(part["midjourney"])
+    assert all(ev.label[i] == 0 for v in part.values() for i in v)
+    for g in gens:
+        assert len(part[g]) == (n_ai[g] if sum(n_ai.values()) <= n_real else n_real // 2)
+    again = ab.partition_real(ev, gens, 0)
+    assert all((again[g] == part[g]).all() for g in gens)
+    other = ab.partition_real(ev, gens, 1)
+    assert any(not np.array_equal(other[g], part[g]) for g in gens)
+    small = ab.partition_real(ev.subset(np.arange(len(ev))[:30]), gens, 0)   # too few Real -> equal share
+    assert set(small["glide"]).isdisjoint(small["midjourney"])
+    assert len(small["glide"]) == len(small["midjourney"])
+
+
+def test_s4_rows_use_disjoint_real_parts(cfg, two_variant_rows):
+    _, _, _, ev = _bundles(1)
+    part = ab.partition_real(ev, ["glide", "midjourney"], cfg["seed"])
+    rows = {r["generator"]: r for r in two_variant_rows if r["scenario"] == "S4" and r["method"] == "quality_only"
+            and r["variant"] == "full" and r["head_variant"] == "clean"}
+    for g in ("glide", "midjourney"):
+        n_ai = sum(1 for lb, x in zip(ev.label, ev.generator) if lb == 1 and x == g)
+        assert rows[g]["n"] == n_ai + len(part[g])
+    assert rows["all"]["n"] == len(ev)

@@ -82,5 +82,5 @@ def test_cli_end_to_end(tmp_path, cfg):
     assert any(r.label == LABEL_REAL and r.split in ("train_experts", "val_gating_fit", "test_benchmark")
                for r in clean)
     rep = json.loads((out / "shortcut_audit.json").read_text())
-    assert rep["shortcut_audit"]["status"] in ("pass", "fail", "skipped")
+    assert rep["shortcut_audit"]["status"] in ("pass", "fail", "skipped", "reported")
     assert rep["stats"]

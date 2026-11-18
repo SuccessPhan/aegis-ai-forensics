@@ -51,3 +51,16 @@ def test_audit_runs_on_toy_manifest_and_cli(toy_manifest, tmp_path, cfg):
     toy_manifest.save(tmp_path / "manifest.json")
     assert main(["--manifest", str(tmp_path / "manifest.json")]) in (0, 1)
     assert SplitManifest.load(tmp_path / "manifest.json").root == toy_manifest.root
+
+
+def test_audit_full_reported_and_has_unseen(toy_manifest, cfg):
+    import copy
+    from src.data.shortcut_audit import audit_full
+    full = audit_full(toy_manifest, cfg)
+    assert full["status"] == "reported" and isinstance(full["passed"], bool)
+    pg = full["per_generator"]
+    assert {g for g, r in pg.items() if r["seen"]} == {"adm", "sd_v1_4"}
+    assert {g for g, r in pg.items() if r["seen"] is False} == {"midjourney", "glide"}
+    c = copy.deepcopy(cfg)
+    c["shortcut_audit"]["enforce"] = True
+    assert audit_full(toy_manifest, c)["status"] in ("pass", "fail")

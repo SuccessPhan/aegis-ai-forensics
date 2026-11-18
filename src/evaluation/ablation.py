@@ -6,6 +6,10 @@ is touched. `test` (test_benchmark) and the S4 pools are only read inside `run_a
 Scenario slicing of the test bundle (via bundle.degradation / bundle.scenario):
   S1 = clean samples; S2 = scenario 'S2' per degradation level (+ 'all'); S3 = scenario 'S3' per level (+ 'all');
   S4 = s4_eval, per N in config fewshot.n_values (support drawn from s4_support, averaged over `s4_seeds`).
+S4 Real balancing: the Real pool of s4_eval (and of s4_support) is split into disjoint, seed-determined parts, one
+per generator (see `partition_real`), so each per-generator row has Real ~= AI; generator='all' uses everything.
+`quality_only` (LR on the 3 quality columns, fit on val_gating_fit) is a SHORTCUT FLOOR emitted in every scenario;
+it is never counted as a competing baseline (summary reports floor_auroc / aegis_minus_floor instead).
 Variants: full (calibrated + OOD features), nocal (T=1), noood (gating sees only p_cal), nocal_noood.
 """
 from __future__ import annotations
@@ -20,7 +24,7 @@ from src.core.config import Config
 from src.core.contracts import EXPERT_NAMES
 from src.core.logger import get_logger
 from src.evaluation.metrics import compute_metrics
-from src.learning.baselines import NaiveAverage, SingleExpert, StaticLearnedWeights
+from src.learning.baselines import NaiveAverage, QualityOnly, SingleExpert, StaticLearnedWeights
 from src.learning.bundle_io import Bundle
 from src.learning.features import FeaturePipeline
 from src.learning.fewshot import adapt, select_support
@@ -29,7 +33,8 @@ from src.learning.gating import GatingController
 
 log = get_logger(__name__)
 
-METHODS = ("clip", "dinov2", "freq", "naive_avg", "static_lr", "aegis")
+METHODS = ("clip", "dinov2", "freq", "naive_avg", "static_lr", "quality_only", "aegis")
+FLOOR = "quality_only"
 S4_ONLY_METHODS = ("static_learned_support",)    # S4 only, variants full/nocal, per N and seed
 _NUM = ("accuracy", "precision", "recall", "f1", "auroc", "ece", "selective_accuracy", "flagged_rate")
 COLUMNS = ["head_variant", "scenario", "level", "generator", "N", "method", "variant", "n", *_NUM]
@@ -48,13 +53,14 @@ class _System:
         self.models["naive_avg"] = NaiveAverage()
         self.models["static_lr"] = StaticLearnedWeights().fit(self.fit_fs, fit.label)
         self.gating = GatingController(cfg, seed=seed).fit(self.fit_fs, fit.label)
+        self.models["quality_only"] = QualityOnly().fit(fit)
         self.models["aegis"] = self.gating
         self.seed = seed
 
 
 def _row(sysm: _System, method: str, model: Any, b: Bundle, fs, scenario: str, level: str, N: Optional[int],
          variant: str):
-    p = model.predict(fs)
+    p = model.predict_bundle(b) if hasattr(model, "predict_bundle") else model.predict(fs)
     flags, _ = compute_flags(fs.p, p, fs.mean_ood, sysm.thr, sysm.cfg)
     return compute_metrics(b.label, p, sysm.cfg, scenario, method, flags,
                            {"level": level, "N": N, "variant": variant})
@@ -121,16 +127,47 @@ def run_ablation(cfg: Config, fit: Bundle, test: Bundle, s4_support: Optional[Bu
                 reports.append(_row(sysm, m, sysm.models[m], b, fs, sc, lvl, None, vname))
         if s4_support is None or s4_eval is None:
             continue
-        for gname, gen in _s4_groups(s4_eval, s4_generators):
-            ev = s4_eval if gen is None else s4_eval.subset(
-                np.array([lb == 0 or g == gen for lb, g in zip(s4_eval.label, s4_eval.generator)]))
-            reports += _s4_reports(cfg, sysm, vname, methods, s4_support, ev, gname, gen, n_values, s4_seeds)
+        groups = _s4_groups(s4_eval, s4_generators)
+        gens = [g for _, g in groups if g is not None]
+        ev_real = partition_real(s4_eval, gens, seed)
+        sup_real = partition_real(s4_support, gens, seed, clean_only=True)
+        for gname, gen in groups:
+            if gen is None:
+                ev, sup_b = s4_eval, s4_support
+            else:
+                ev, sup_b = _gen_bundle(s4_eval, gen, ev_real[gen]), _gen_bundle(s4_support, gen, sup_real[gen])
+            reports += _s4_reports(cfg, sysm, vname, methods, sup_b, ev, gname, gen, n_values, s4_seeds)
     rows = [_flatten(r) for r in reports]
     for r in rows:
         r["head_variant"] = head_variant
     if out_dir is not None:
         write_tables(rows, out_dir)
     return rows
+
+
+def partition_real(b: Bundle, generators: Sequence[str], seed: int, clean_only: bool = False
+                   ) -> Dict[str, np.ndarray]:
+    """Disjoint Real parts per generator (indices into `b`). Real samples are sorted by sha256, permuted with
+    default_rng(seed), then cut into consecutive slices; generator g (sorted order) gets a slice of size = #AI of g
+    in `b`. If the Real pool is too small for all, every generator gets an equal share len(real)//len(generators).
+    Parts never overlap; deterministic for a given seed."""
+    gens = sorted(generators)
+    ok = b.clean_mask() if clean_only else np.ones(len(b), dtype=bool)
+    real = sorted((i for i in np.flatnonzero(ok) if b.label[i] == 0), key=lambda i: b.sha256[i])
+    perm = [real[i] for i in np.random.default_rng(seed).permutation(len(real))]
+    want = {g: sum(1 for i in np.flatnonzero(ok) if b.label[i] == 1 and b.generator[i] == g) for g in gens}
+    if sum(want.values()) > len(perm):
+        want = {g: len(perm) // max(len(gens), 1) for g in gens}
+    out, pos = {}, 0
+    for g in gens:
+        out[g] = np.array(perm[pos:pos + want[g]], dtype=int)
+        pos += want[g]
+    return out
+
+
+def _gen_bundle(b: Bundle, gen: str, real_idx: np.ndarray) -> Bundle:
+    ai = [i for i, (lb, g) in enumerate(zip(b.label, b.generator)) if lb == 1 and g == gen]
+    return b.subset(np.array(ai + real_idx.tolist(), dtype=int))
 
 
 def _s4_groups(s4_eval: Bundle, generators: Optional[Sequence[str]]):
@@ -211,6 +248,9 @@ def summarize_best_baseline(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not cands:
             continue
         best = max(cands, key=_score)
+        floor = [c for c in full if c["method"] == FLOOR and _key(c)[:3] == (sc, lvl, gen) and c["N"] in (None, n)
+                 and c.get("head_variant") == r.get("head_variant")]
+        f_auc = floor[0]["auroc"] if floor else None
         hv = best.get("head_variant")
         d_auc = r["auroc"] - best["auroc"] if _isnum(r["auroc"]) and _isnum(best["auroc"]) else None
         d_acc = r["accuracy"] - best["accuracy"] if _isnum(r["accuracy"]) and _isnum(best["accuracy"]) else None
@@ -218,12 +258,14 @@ def summarize_best_baseline(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     "aegis_accuracy": r["accuracy"], "aegis_auroc": r["auroc"],
                     "best_baseline": f"{best['method']}_{hv}" if hv else best["method"],
                     "best_accuracy": best["accuracy"], "best_auroc": best["auroc"],
-                    "delta_auroc": d_auc, "delta_accuracy": d_acc})
+                    "delta_auroc": d_auc, "delta_accuracy": d_acc, "floor_auroc": f_auc,
+                    "aegis_minus_floor": r["auroc"] - f_auc if _isnum(r["auroc"]) and _isnum(f_auc) else None})
     return out
 
 
 SUMMARY_COLUMNS = ["scenario", "level", "generator", "N", "head_variant", "aegis_accuracy", "aegis_auroc",
-                   "best_baseline", "best_accuracy", "best_auroc", "delta_auroc", "delta_accuracy"]
+                   "best_baseline", "best_accuracy", "best_auroc", "delta_auroc", "delta_accuracy",
+                   "floor_auroc", "aegis_minus_floor"]
 
 
 def _main_table(rows: List[Dict[str, Any]], title: str) -> List[str]:
@@ -248,6 +290,8 @@ def _long_table(rows: List[Dict[str, Any]]) -> List[str]:
 def _summary_md(summ: List[Dict[str, Any]]) -> List[str]:
     cols = SUMMARY_COLUMNS
     return ["# AEGIS (full) vs strongest baseline across all head variants", "",
+            "Note: `quality_only` is a shortcut FLOOR (LR on 3 quality columns), not a competing baseline; it is "
+            "excluded from best_baseline and reported as floor_auroc / aegis_minus_floor.", "",
             "| " + " | ".join(cols) + " |", "|" + "---|" * len(cols),
             *("| " + " | ".join(_fmt(r.get(c)) for c in cols) + " |" for r in summ)]
 
@@ -266,7 +310,9 @@ def write_tables(rows: List[Dict[str, Any]], out_dir: str | Path) -> None:
     for hv in hvs:
         sub = [r for r in rows if r.get("head_variant") == hv]
         lines = _main_table(sub, f"# AEGIS ablation, head variant = {hv or 'default'} "
-                                 "(cells: accuracy / AUROC; variant = full)") + [""] + _long_table(sub)
+                                 "(cells: accuracy / AUROC; variant = full)")
+        lines += ["", "`quality_only` = shortcut FLOOR (logistic regression on the 3 quality features only); every "
+                  "method must beat it by a wide margin.", ""] + _long_table(sub)
         if hv:
             (out / f"ablation_{hv}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
         parts += lines + [""]
@@ -318,15 +364,19 @@ def run_all(cfg: Config, head_variants: Optional[Sequence[str]] = None, out_dir:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     import argparse
-    from src.core.config import REPO_ROOT, load_config
+    from src.core.config import REPO_ROOT, load_config, resolve_path
     ap = argparse.ArgumentParser(prog="python -m src.evaluation.ablation", description="AEGIS final ablation")
     ap.add_argument("--head-variants", nargs="+", default=None, help="e.g. clean aug (default: auto-detect)")
     ap.add_argument("--out", default=str(REPO_ROOT / "reports"))
     ap.add_argument("--config", default=None)
     ap.add_argument("--s4-seeds", nargs="+", type=int, default=None)
     a = ap.parse_args(argv)
+    cfg = load_config(a.config)
+    out = a.out or str(resolve_path(cfg, "reports_dir") if "reports_dir" in cfg.get("paths", {})
+                       else REPO_ROOT / "reports")
+    hvs = a.head_variants or (cfg.get("evaluation") or {}).get("head_variants") or None
     try:
-        run_all(load_config(a.config), a.head_variants, a.out, a.s4_seeds)
+        run_all(cfg, hvs, out, a.s4_seeds)
     except MissingBundlesError as e:
         log.error("%s", e)
         return 2
