@@ -72,11 +72,11 @@ class FreqCNN(nn.Module):
 class FreqExpert(BaseExpert):
     name = "freq"
 
-    def __init__(self, cfg: dict) -> None:
+    def __init__(self, cfg: dict, input_mode: str | None = None) -> None:
         super().__init__()
         fc = cfg["experts"]["freq"]
         self.cfg = cfg
-        self.input_mode = fc["input"]
+        self.input_mode = input_mode or fc["input"]
         if self.input_mode not in ("log_magnitude_fft", "srm"):
             raise ValueError(f"unknown freq input '{self.input_mode}'")
         self.net = FreqCNN(fc["channels"])

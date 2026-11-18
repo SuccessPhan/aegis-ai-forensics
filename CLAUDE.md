@@ -9,7 +9,7 @@
 - **Phase 1 Scope:** Static AI-generated image detection only. No video, no localization, no web crawlers.
 
 ## 2. System Architecture & Pipeline
-Detailed technical specification (v2.0): [`docs/PROJECT_BRIEF.md` §5](docs/PROJECT_BRIEF.md). If this file and the brief disagree, update both — never silently pick one.
+Detailed technical specification (v2.0): [`docs/PROJECT_BRIEF.md` §5](docs/PROJECT_BRIEF.md). Post-literature-review decisions (normalization mode chosen by audit, clean vs. augmented heads, FFT vs. SRM chosen on val, S4 split per generator): §6. If this file and the brief disagree, update both — never silently pick one.
 
 1. **Data Layer (`src/data/`):** Image validation, SHA-256 deduplication, metadata provenance, shortcut removal, and strict 3-way leakage-free split:
    - **Dataset:** GenImage subset, ~12k–16k images, 50% Real (ImageNet) / 50% AI. **Seen generators:** ADM, Stable Diffusion v1.4. **Unseen (S4 only):** Midjourney, GLIDE. BigGAN is excluded (128×128). CIFAKE is allowed only as dummy data for pipeline tests — never in a benchmark.
@@ -33,10 +33,10 @@ Detailed technical specification (v2.0): [`docs/PROJECT_BRIEF.md` §5](docs/PROJ
    - **Weights:** $w = 0.05 + 0.85 \cdot \mathrm{softmax}(z)$, so $\sum w_i = 1$ and $w_i \in [0.05, 0.90]$. Output $P_{final} = \sum_i w_i P_i$.
    - **Data-Aware Few-Shot Adaptation (S4):**
      - $N < 10$: Conservative routing, $\alpha = 0$; keep weights unchanged; log scarcity warning.
-     - $10 \le N \le 50$: Regularized anchor update $w_{adapted} = (1-\alpha)\,w_{gating} + \alpha\,w_{few\_shot}$ with $\alpha = \min(0.6, N/50)$; $w_{few\_shot}$ from regularized logistic regression / grid search on the support set; per-expert prototypes updated for OOD distances. Global `val_gating` weights are not modified.
+     - $10 \le N \le 50$: Regularized anchor update $w_{adapted} = (1-\alpha)\,w_{gating} + \alpha\,w_{few\_shot}$ with $\alpha = \min(0.6, N/50)$; $w_{few\_shot}$ from regularized logistic regression / grid search on the support set. No prototype update (decided 2026-11-18). Global `val_gating` weights are not modified.
      - $N > 50$: Full gating recalibration (refit the gating MLP on `val_gating_fit` + support set).
    - **Yellow flag** (`warning_flag = True`) if either: (a) some $P_i > 0.80$ and some $P_j < 0.20$ and $\mathrm{Std}(P_1,P_2,P_3) > 0.30$; or (b) $P_{final} \in [0.40, 0.60]$ or mean OOD score > 95th percentile of `val_gating`.
-5. **Evaluation & Safety (`src/evaluation/`):** Metrics: Accuracy, Precision, Recall, F1, AUROC, ECE, plus **Selective Accuracy** (accuracy on unflagged samples) and **Flagged Rate**. Champion-Challenger verification on `val_gating_verify`, automatic Rollback on regression. Ablation baselines: each single expert, Naive Average Ensemble, Static Learned Weights (logistic-regression stacking on `val_gating_fit`), and AEGIS Adaptive Gating.
+5. **Evaluation & Safety (`src/evaluation/`):** Metrics: Accuracy, Precision, Recall, F1, AUROC, ECE, plus **Selective Accuracy** (accuracy on unflagged samples) and **Flagged Rate**. Champion-Challenger verification on `val_gating_verify`, automatic Rollback on regression. Ablation baselines: each single expert, Naive Average Ensemble, Static Learned Weights (logistic-regression stacking on `val_gating_fit`), and AEGIS Adaptive Gating. In S4, an extra **Static Learned Weights + support** baseline (refit on `val_gating_fit` + the same support set) ensures AEGIS is compared at equal labeled-data budget.
 
 ## 3. Local Hardware Constraints (STRICT)
 - **Target hardware:** NVIDIA RTX 4060 Laptop (8 GB VRAM).

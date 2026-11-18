@@ -48,6 +48,9 @@ SPLIT_S4_EVAL = "s4_eval"
 S4_SPLITS: Tuple[str, ...] = (SPLIT_S4_SUPPORT, SPLIT_S4_EVAL)
 ALL_SPLITS: Tuple[str, ...] = SPLITS + S4_SPLITS
 
+# scenario tag of train-time augmentation variants (train_experts only; never clean, never evaluated)
+SCENARIO_TRAIN_AUG = "train_aug"
+
 QUALITY_FEATURE_NAMES: Tuple[str, ...] = ("jpeg_quality_est", "log_laplacian_var", "high_freq_energy_ratio")
 GATING_FEATURE_NAMES: Tuple[str, ...] = (
     QUALITY_FEATURE_NAMES
@@ -78,6 +81,8 @@ class DegradationSpec:
     scenario: Optional[str] = None             # "S2" / "S3" for fixed test levels, "val" for random val ones
 
     def is_clean(self) -> bool:
+        if self.scenario == SCENARIO_TRAIN_AUG:    # train_aug variants are never "clean", even if a draw were a no-op
+            return False
         return self.jpeg_quality is None and self.blur_sigma is None and self.resize_factor is None
 
 
@@ -108,8 +113,18 @@ class SplitManifest:
     root: str = ""                             # directory that record.path is relative to
     meta: Dict[str, Any] = field(default_factory=dict)
 
-    def by_split(self, split: str, clean_only: bool = False) -> List[ImageRecord]:
-        return [r for r in self.records if r.split == split and (r.is_clean or not clean_only)]
+    def by_split(self, split: str, clean_only: bool = False,
+                 include_scenarios: Sequence[str] = ()) -> List[ImageRecord]:
+        """Records of `split`. clean_only=True drops degraded variants (incl. train_aug) except those whose
+        degradation.scenario is in `include_scenarios` (e.g. include_scenarios=("train_aug",) => clean + train_aug)."""
+        inc = set(include_scenarios)
+
+        def keep(r: ImageRecord) -> bool:
+            if r.is_clean or not clean_only:
+                return True
+            return r.degradation is not None and r.degradation.scenario in inc
+
+        return [r for r in self.records if r.split == split and keep(r)]
 
     def abs_path(self, rec: ImageRecord) -> Path:
         p = Path(rec.path)

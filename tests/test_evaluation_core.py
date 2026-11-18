@@ -59,10 +59,34 @@ def test_ablation_end_to_end(tmp_path, cfg):
     ev = make_synthetic_bundle(120, seed=4, unseen=True, clean_only=True, tag="ev")
     rows = run_ablation(cfg, fit, test, sup, ev, out_dir=tmp_path, n_values=[5, 20, 100])
     assert {r["scenario"] for r in rows} == {"S1", "S2", "S4"}
-    full = [r for r in rows if r["variant"] == "full" and r["scenario"] == "S4" and r["method"] == "aegis"]
+    full = [r for r in rows if r["variant"] == "full" and r["scenario"] == "S4" and r["method"] == "aegis"
+            and r["generator"] == "all"]
     assert sorted(r["N"] for r in full) == [5, 20, 100]
     assert {r["regime"] for r in full} == {"conservative", "anchor", "refit"}
     assert {"nocal", "noood", "nocal_noood"} <= {r["variant"] for r in rows}
     with open(tmp_path / "ablation.csv", encoding="utf-8") as f:
         assert len(list(csv.DictReader(f))) == len(rows)
     assert "AUROC" in (tmp_path / "ablation.md").read_text(encoding="utf-8")
+
+
+def test_static_learned_support_same_support_as_aegis(tmp_path, cfg):
+    from src.learning.fewshot import select_support
+    fit = make_synthetic_bundle(300, seed=1)
+    test = make_synthetic_bundle(200, seed=2, scenarios=True)
+    sup = make_synthetic_bundle(150, seed=3, unseen=True, clean_only=True, tag="sup")
+    ev = make_synthetic_bundle(120, seed=4, unseen=True, clean_only=True, tag="ev")
+    seeds, ns = [0, 1], [5, 20, 100]
+    rows = run_ablation(cfg, fit, test, sup, ev, out_dir=tmp_path, s4_seeds=seeds, n_values=ns)
+    for variant in ("full", "nocal"):
+        sl = {r["N"]: r for r in rows if r["method"] == "static_learned_support" and r["variant"] == variant}
+        ae = {r["N"]: r for r in rows if r["method"] == "aegis" and r["variant"] == variant and r["scenario"] == "S4"
+              and r["N"] is not None}
+        assert sorted(sl) == ns
+        for n in ns:
+            assert sl[n]["scenario"] == "S4"
+            assert sl[n]["support_sha256"] == ae[n]["support_sha256"]
+            for s in seeds:
+                assert sl[n]["support_sha256"][s] == [str(x) for x in select_support(sup, n, s).sha256]
+    assert not [r for r in rows if r["method"] == "static_learned_support" and r["scenario"] != "S4"]
+    assert not [r for r in rows if r["method"] == "static_learned_support" and r["variant"].endswith("noood")]
+    assert "static_learned_support" in (tmp_path / "ablation.md").read_text(encoding="utf-8")

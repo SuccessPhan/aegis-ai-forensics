@@ -25,7 +25,7 @@ Ba góc nhìn khác nhau để triệt tiêu điểm mù của từng mô hình 
 ### 2.2. Bộ điều phối thông minh (Adaptive Gating Controller)
 - Trước khi kết luận, hệ thống phân tích:
   - **Hồ sơ chất lượng ảnh:** mức nén JPEG, độ mờ, độ phân giải.
-  - **Độ bất định nội tại của từng chuyên gia:** Predictive Entropy, Energy / Cosine OOD score.
+  - **Độ bất định nội tại của từng chuyên gia:** Predictive Entropy, Cosine OOD distance (Energy score không dùng — xem §5.3 và `docs/research/METHOD_SPECS.md` câu d).
 - Từ đó chia trọng số động `(w1, w2, w3)`.
 - **Ví dụ:** ảnh bị nén nặng → giảm trọng số chuyên gia Tần số, dồn trọng số cho CLIP / DINOv2.
 
@@ -80,6 +80,7 @@ Toàn bộ code phải phục vụ được **bảng thực nghiệm đối ch�
 - **Loại bỏ:** BigGAN (128×128, không chuẩn hóa được về 224). CIFAKE (32×32) chỉ làm dữ liệu giả để test pipeline, không bao giờ vào benchmark.
 - **Lý do:** trong GenImage, ảnh Real là JPEG nhiều kích thước, ảnh AI là PNG kích thước cố định → định dạng/kích thước tự "tiết lộ" nhãn.
 - **Chuẩn hóa trước khi chia tập:** mọi ảnh Center-Crop **224×224**, lưu **PNG không nén**. Bước hòa đồng lịch sử JPEG có thể bật/tắt trong config (`data.normalize.jpeg_harmonize`), vì ảnh Real vẫn mang dấu vết nén JPEG trong điểm ảnh dù đã lưu lại thành PNG.
+- **Nguồn tải thực tế:** file `genimage_test.zip` (split *test* của GenImage, 6.000 AI + 6.000 Real mỗi generator) trên mirror Hugging Face `jzousz/GenImage` (bản mirror cộng đồng; bản chính thức phát hành qua Baidu Yunpan, repo GitHub `GenImage-Dataset/GenImage`). Lấy ngẫu nhiên có seed 2.000 AI + 2.000 Real mỗi generator (ADM, SD v1.4, Midjourney, GLIDE) = 16.000 ảnh, rồi AEGIS **tự chia lại** thành `train_experts` / `val_gating` / `test_benchmark` / S4. Phải ghi rõ điều này trong báo cáo (không dùng split train/val gốc của GenImage). Giấy phép: CC BY-NC-SA 4.0, chỉ dùng phi thương mại. Danh mục file xác nhận độ lệch định dạng: 100% ảnh AI là PNG, 100% ảnh Real là JPEG.
 - **Bài test bắt buộc `test_no_dataset_shortcut`:** Logistic Regression chỉ dùng 3 đặc trưng chất lượng ảnh trên S1 sạch phải có Accuracy và AUROC trong khoảng **0.50 ± 0.05**.
 
 ### 5.2. Backbone & chuyên gia (phần cứng: RTX 4060 Laptop 8 GB)
@@ -99,8 +100,9 @@ Embedding cache dạng `.pt` float16 trong `data/cache/`.
 ### 5.4. Few-shot adaptation (S4)
 - Support set = **N/2 ảnh AI mới + N/2 ảnh Real** từ kho Real riêng. Chạy N ∈ {5, 20, 100}.
 - `N < 10`: `α = 0`, giữ nguyên trọng số, ghi log cảnh báo khan hiếm.
-- `10 ≤ N ≤ 50`: `w_adapted = (1 − α)·w_gating + α·w_few_shot`, với `α = min(0.6, N/50)`; `w_few_shot` tìm bằng regularized logistic regression / grid search trên support set; cập nhật prototype từng expert cho khoảng cách OOD. Không sửa trọng số gốc của `val_gating`.
+- `10 ≤ N ≤ 50`: `w_adapted = (1 − α)·w_gating + α·w_few_shot`, với `α = min(0.6, N/50)`; `w_few_shot` tìm bằng regularized logistic regression / grid search trên support set. Không sửa trọng số gốc của `val_gating`. *(Quyết định 2026-11-18: không cập nhật prototype trong few-shot — chỉ hiệu chỉnh trọng số.)*
 - `N > 50`: refit toàn bộ bộ điều phối trên `val_gating_fit` + support set.
+- **So sánh công bằng ở S4:** ngoài các baseline không thích nghi, bảng S4 có thêm baseline **Static Learned Weights + support** (refit logistic regression stacking trên `val_gating_fit` + cùng support set). AEGIS phải thắng baseline này để chứng minh lợi ích đến từ *cơ chế* thích nghi, không chỉ từ việc có thêm N mẫu có nhãn.
 
 ### 5.5. Thông số suy giảm
 | Tập | JPEG | Resize | Blur |
@@ -116,3 +118,13 @@ Head của các expert chỉ được train trên ảnh sạch.
   - **Mâu thuẫn gay gắt:** có `P_i > 0.80` và `P_j < 0.20`, **và** `Std(P1, P2, P3) > 0.30`.
   - **Lưỡng lự:** `P_final ∈ [0.40, 0.60]` **hoặc** điểm OOD trung bình > phân vị 95 của `val_gating`.
 - Chỉ số bắt buộc: Accuracy, Precision, Recall, F1, AUROC, ECE, **Selective Accuracy** (độ chính xác trên mẫu không bị gắn cờ) và **Flagged Rate** (tỷ lệ mẫu bị gắn cờ), cho từng kịch bản S1–S4.
+
+## 6. Quyết định sau rà soát tài liệu (2026-11-18)
+
+Căn cứ: `docs/research/METHOD_SPECS.md` (research-analyst). Người dùng chọn cả ba phương án dựa trên bằng chứng:
+
+1. **Chuẩn hóa kích thước — quyết định theo audit.** Center-crop 224 trực tiếp làm lệch "độ zoom" giữa generator (Midjourney 1024² chỉ lấy ~5% diện tích, ADM/GLIDE 256² lấy ~77%). Chuẩn hóa dữ liệu thật theo **cả hai** chế độ: `crop` (crop 224 trực tiếp) và `resize_crop` (resize cạnh ngắn về 256 có antialias rồi crop 224, theo hướng *Fake or JPEG?*). Chạy shortcut audit trên cả hai; chọn chế độ vượt audit (nếu cả hai cùng vượt, ưu tiên `resize_crop` vì cân bằng tỉ lệ đối tượng). Quy tắc "không resize trước expert tần số" vẫn áp dụng **sau** bước chuẩn hóa này (resize ở bước chuẩn hóa áp dụng đồng đều cho cả Real và AI).
+2. **Head expert — báo cáo cả hai biến thể.** `clean`: train chỉ trên ảnh sạch. `aug`: train có augmentation theo UnivFD/CNNSpot (mỗi ảnh nguồn của `train_experts` có thêm biến thể suy giảm: Gaussian blur với xác suất 0.5, σ ~ U[0, 3]; JPEG với xác suất 0.5, Q ~ U[30, 100]). Bảng ablation xuất cho cả hai biến thể head; AEGIS phải được so với baseline mạnh nhất.
+3. **Expert 3 — chọn theo validation.** Train cả `log_magnitude_fft` và `srm`; chọn biến thể có AUROC cao hơn trên `val_gating_fit`; báo cáo cả hai.
+4. **Báo cáo S4 tách riêng Midjourney và GLIDE**, vì GLIDE có thể không đủ OOD (ADM — thuộc nhóm Seen — chuyển sang GLIDE đạt 97,1% trong GenImage Bảng 3).
+5. **Không dùng Energy score** (không có căn cứ cho head nhị phân một logit — METHOD_SPECS câu d).

@@ -58,7 +58,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     records = [r for r in man.records if r.split in splits]
     expert = build_expert(a.expert, cfg).to(a.device)
     cache = FeatureCache.open(cfg, a.expert)
-    extract_records(expert, man, records, cache, int(cfg["experts"]["extract"]["batch_size"]))
+    extract_cfg = cfg["experts"]["extract"]
+    extract_records(expert, man, records, cache, int(extract_cfg["batch_size"]),
+                    save_every=int(extract_cfg.get("save_every", 20)))
     return 0
 
 
