@@ -1,6 +1,9 @@
 """Hand-off bundle for the gating / evaluation layer.
 
-CLI: python -m src.models.bundle --manifest <path> --split <name> [--out <file>]
+CLI: python -m src.models.bundle --manifest <path> --split <name> [--head-variant clean|aug]
+     [--freq-input log_magnitude_fft|srm] [--out <file>]
+With --head-variant the file goes to <cache_dir>/bundles/<head_variant>/<split>.pt (else bundles/<split>.pt).
+meta additionally holds head_variant and freq_input. Dict format is otherwise unchanged.
 
 File ``<cache_dir>/bundles/<split>.pt`` is a dict (all lists/tensors aligned, n = records of the split,
 including degraded variants, in manifest order):
@@ -39,7 +42,8 @@ log = get_logger(__name__)
 
 def build_bundle(man: SplitManifest, records: Sequence[ImageRecord], split: str, cfg: dict,
                  experts: Dict[str, object], caches: Dict[str, FeatureCache],
-                 centroids: Dict[str, torch.Tensor], batch_size: int = 64) -> dict:
+                 centroids: Dict[str, torch.Tensor], batch_size: int = 64,
+                 head_variant: str = "clean") -> dict:
     """`experts` maps name -> expert with head/weights loaded; clip/dinov2 read features from `caches`."""
     n = len(records)
     logits = torch.zeros(n, 3)
@@ -72,18 +76,22 @@ def build_bundle(man: SplitManifest, records: Sequence[ImageRecord], split: str,
         "logits": logits, "cosdist": cosd, "quality": quality,
         "meta": {"cache_version": cfg["experts"]["extract"]["cache_version"],
                  "model_ids": {k: getattr(e, "model_id", "") for k, e in experts.items()},
-                 "split": split, "created": datetime.now().isoformat(timespec="seconds")},
+                 "split": split, "head_variant": head_variant,
+                 "freq_input": getattr(experts.get("freq"), "input_mode", None),
+                 "created": datetime.now().isoformat(timespec="seconds")},
     }
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     from src.models import build_expert
-    from src.models.heads import load_head_into
+    from src.models.heads import centroid_key, load_head_into, with_freq_input
     from src.ood.profiler import load_centroids
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--manifest", required=True)
     ap.add_argument("--split", required=True)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--head-variant", default=None, choices=["clean", "aug"])
+    ap.add_argument("--freq-input", default=None, choices=["log_magnitude_fft", "srm"])
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     a = ap.parse_args(argv)
     cfg = load_config()
@@ -91,14 +99,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     records = [r for r in man.records if r.split == a.split]
     if not records:
         raise SystemExit(f"no records in split '{a.split}'")
+    hv = a.head_variant or "clean"
+    cfg_f = with_freq_input(cfg, a.freq_input)
     experts = {}
     for name in EXPERT_NAMES:
-        e = build_expert(name, cfg).to(a.device)
-        load_head_into(cfg, e)
+        e = build_expert(name, cfg_f).to(a.device)
+        load_head_into(cfg, e, hv)
         experts[name] = e.eval()
     caches = {n: FeatureCache.open(cfg, n) for n in ("clip", "dinov2")}
-    bundle = build_bundle(man, records, a.split, cfg, experts, caches, load_centroids(cfg))
-    out = Path(a.out) if a.out else resolve_path(cfg, "cache_dir") / "bundles" / f"{a.split}.pt"
+    cents = dict(load_centroids(cfg))
+    fk = centroid_key("freq", experts["freq"].input_mode, hv)
+    cents["freq"] = cents[fk] if fk in cents else cents["freq"]
+    bundle = build_bundle(man, records, a.split, cfg, experts, caches, cents, head_variant=hv)
+    sub = Path(a.head_variant) if a.head_variant else Path()
+    out = Path(a.out) if a.out else resolve_path(cfg, "cache_dir") / "bundles" / sub / f"{a.split}.pt"
     out.parent.mkdir(parents=True, exist_ok=True)
     torch.save(bundle, out)
     log.info("bundle %s: %d samples -> %s", a.split, len(records), out)

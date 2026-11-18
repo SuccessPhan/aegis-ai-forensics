@@ -5,8 +5,7 @@ conservative_below <= N <= anchor_max : w_adapted = (1-alpha) w_gating(x) + alph
 N > anchor_max          : refit the gating on val_gating_fit + support (new model; the base is never modified).
 
 Support labels must be GROUND TRUTH from the split manifest (s4_support pool). Detector predictions are never
-used as labels. Not implemented (needs raw embeddings, not in the bundle): per-expert prototype update for the
-OOD distance - report to expert-detector-eng if wanted.
+used as labels. Per user decision (2026-11-18) few-shot only recalibrates weights; no prototype update.
 """
 from __future__ import annotations
 

@@ -123,14 +123,16 @@ def load_bundle(path: str | Path) -> Bundle:
     return b
 
 
-def bundle_path(cfg: Config, split: str) -> Path:
+def bundle_path(cfg: Config, split: str, head_variant: Optional[str] = None) -> Path:
+    """data/cache/bundles/<head_variant>/<split>.pt; legacy data/cache/bundles/<split>.pt when no variant given."""
     if split not in ALL_SPLITS:
         raise ValueError(f"unknown split {split!r}")
-    return resolve_path(cfg, "cache_dir") / "bundles" / f"{split}.pt"
+    base = resolve_path(cfg, "cache_dir") / "bundles"
+    return (base / head_variant if head_variant else base) / f"{split}.pt"
 
 
-def load_split(cfg: Config, split: str) -> Bundle:
-    return load_bundle(bundle_path(cfg, split))
+def load_split(cfg: Config, split: str, head_variant: Optional[str] = None) -> Bundle:
+    return load_bundle(bundle_path(cfg, split, head_variant))
 
 
 def save_bundle(b: Bundle, path: str | Path) -> None:

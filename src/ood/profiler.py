@@ -49,7 +49,10 @@ def compute_centroid(features: torch.Tensor) -> torch.Tensor:
 
 
 def centroid_path(cfg: dict) -> Path:
-    return resolve_path(cfg, "cache_dir") / f"centroids_{cfg['experts']['extract']['cache_version']}.pt"
+    name = (cfg.get("ood") or {}).get("centroid_file")
+    if not name:
+        name = f"centroids_{cfg['experts']['extract']['cache_version']}.pt"
+    return resolve_path(cfg, "cache_dir") / name
 
 
 def save_centroids(cfg: dict, centroids: Dict[str, torch.Tensor]) -> Path:

@@ -21,6 +21,8 @@ data:
   real_name: "real"
   target_size_total: [12000, 16000]
   normalize:
+    mode: "crop"                        # "crop" (direct center-crop) | "resize_crop" (short side -> resize_short_side, LANCZOS, then crop); decided by the real-data shortcut audit (brief section 6.1)
+    resize_short_side: 256              # used only when mode == "resize_crop"
     crop_size: 224
     format: "png"
     png_compress_level: 0               # uncompressed PNG
@@ -47,6 +49,12 @@ degradation:
     resize_factor_range: null           # no resize in val_gating (brief 5.5)
     variants_per_source: 2
     kinds: ["jpeg", "blur"]
+  train_aug:                            # train_experts only (UnivFD/CNNSpot augmentation; METHOD_SPECS question b)
+    variants_per_source: 1              # 0 disables
+    blur_prob: 0.5
+    blur_sigma_range: [0.0, 3.0]        # sigma ~ U[0, 3]
+    jpeg_prob: 0.5
+    jpeg_quality_range: [30, 100]       # Q ~ U[30, 100]
   test:                                 # fixed levels, test_benchmark
     s2_jpeg_quality: [85, 65, 40]
     s3_resize: {factor: 0.5, interpolation: "bilinear"}   # downscale then upscale back
@@ -110,7 +118,8 @@ gating_train:                                     # ASSUMPTION: initial values, 
 evaluation:
   scenarios: ["S1", "S2", "S3", "S4"]
   ece_bins: 15
-  methods: ["clip", "dinov2", "freq", "naive_average", "static_learned", "aegis"]
+  methods: ["clip", "dinov2", "freq", "naive_avg", "static_lr", "aegis"]   # names as used in src/evaluation/ablation.py
+  s4_only_methods: ["static_learned_support"]   # refit on val_gating_fit + the same support set as AEGIS
   champion_challenger:
     split: "val_gating_verify"                    # NEVER test_benchmark
     primary_metric: "auroc"

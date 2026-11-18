@@ -48,7 +48,9 @@ def test_variants_share_parent_split_and_val_contains_degraded(toy_manifest):
         assert p.split == v.split and p.source_group_id == v.source_group_id
     for s in (SPLIT_VAL_FIT, SPLIT_VAL_VERIFY):
         assert any(not r.is_clean for r in toy_manifest.by_split(s)), s
-    assert not any(not r.is_clean for r in toy_manifest.by_split(SPLIT_TRAIN))
+    # train_experts holds only clean images plus train_aug variants (never val/test-style degradations)
+    assert all(r.degradation.scenario == "train_aug"
+               for r in toy_manifest.by_split(SPLIT_TRAIN) if not r.is_clean)
     test_names = {r.degradation.name for r in toy_manifest.by_split(SPLIT_TEST) if not r.is_clean}
     assert {"jpeg_q85", "jpeg_q65", "jpeg_q40", "resize_0.5", "blur_k11_s1.5", "blur_k17_s2.5"} == test_names
 
