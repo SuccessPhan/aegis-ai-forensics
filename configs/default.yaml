@@ -17,7 +17,7 @@ paths:
 data:
   generators:
     seen: ["adm", "sd_v1_4"]            # train_experts, val_gating, S1/S2/S3
-    unseen: ["midjourney", "glide"]     # S4 only, sealed from train_experts / val_gating
+    unseen: ["midjourney", "vqdm"]      # S4 only, sealed from train_experts / val_gating. GLIDE replaced by VQDM (brief §9): GLIDE was trivially separable by image quality alone (AUROC 0.979)
     excluded: ["biggan", "cifake"]      # BigGAN 128px not normalizable; CIFAKE only for pipeline smoke tests
   real_name: "real"
   target_size_total: [12000, 16000]
@@ -135,6 +135,7 @@ evaluation:
     rollback_primary_tolerance: 0.01              # ASSUMPTION: allowed primary-metric drop before rollback
 
 gating:
+  fusion: "prob"                        # "prob": P = sum w_i P_i ; "logit": P = sigmoid(sum w_i logit_i). Chosen on val_gating_verify only (brief §9)
   input_dim: 12
   hidden_dim: 32
   num_experts: 3
@@ -162,7 +163,7 @@ flags:
 
 toy:
   n_total: 100
-  counts: {adm: 15, sd_v1_4: 15, midjourney: 10, glide: 10, real: 50}
+  counts: {adm: 15, sd_v1_4: 15, midjourney: 10, vqdm: 10, real: 50}
   raw_size_range: [256, 340]
   # Toy is tiny, so S4 pools are made larger than for real data.
   split_overrides:

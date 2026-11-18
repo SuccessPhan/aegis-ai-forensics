@@ -25,7 +25,14 @@ log = get_logger(__name__)
 
 # per-generator (grid period, amplitude, colour tint): a synthetic, learnable "fingerprint"
 _SIGNATURE = {"adm": (4, 4.0, (6, -3, 0)), "sd_v1_4": (8, 3.0, (-4, 4, 2)),
-              "midjourney": (5, 5.0, (0, 6, -6)), "glide": (3, 4.0, (5, 0, 5))}
+              "midjourney": (5, 5.0, (0, 6, -6)), "glide": (3, 4.0, (5, 0, 5)), "vqdm": (6, 4.5, (4, -5, 5))}
+
+
+def _fallback_signature(generator: str) -> tuple:
+    """Deterministic signature for a generator name without a hand-written profile (toy follows the config list)."""
+    import zlib
+    r = np.random.default_rng(zlib.crc32(generator.encode()))
+    return (int(r.integers(3, 10)), float(r.uniform(3, 5)), tuple(int(v) for v in r.integers(-6, 7, 3)))
 
 
 def _synth(rng: np.random.Generator, size: int, generator: str, real_name: str) -> np.ndarray:
@@ -35,7 +42,7 @@ def _synth(rng: np.random.Generator, size: int, generator: str, real_name: str) 
     base += (rng.uniform(-30, 30) * (xx / size) + rng.uniform(-30, 30) * (yy / size))[..., None]
     base += rng.normal(0, 3.0 if generator == real_name else 2.0, base.shape)
     if generator != real_name:
-        period, amp, tint = _SIGNATURE[generator]
+        period, amp, tint = _SIGNATURE.get(generator) or _fallback_signature(generator)
         base += amp * np.sin(2 * np.pi * xx / period)[..., None] + np.array(tint)
     return np.clip(base, 0, 255).astype(np.uint8)
 

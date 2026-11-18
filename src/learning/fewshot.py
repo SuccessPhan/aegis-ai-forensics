@@ -20,6 +20,7 @@ from src.core.config import Config
 from src.core.logger import get_logger
 from src.learning.bundle_io import Bundle
 from src.learning.features import FeatureSet
+from src.learning.fusion import calibrated_logits, fuse, sigmoid
 from src.learning.gating import GatingController
 
 log = get_logger(__name__)
@@ -48,6 +49,7 @@ class AdaptedModel:
 
     def __init__(self, base: GatingController, w_few_shot: Optional[np.ndarray], alpha: float):
         self.base, self.w_few_shot, self.alpha = base, w_few_shot, alpha
+        self.fusion = base.fusion
 
     def weights(self, fs: FeatureSet) -> np.ndarray:
         w = self.base.weights(fs)
@@ -56,7 +58,7 @@ class AdaptedModel:
         return (1 - self.alpha) * w + self.alpha * self.w_few_shot[None, :]
 
     def predict(self, fs: FeatureSet) -> np.ndarray:
-        return (self.weights(fs) * fs.p).sum(1)
+        return fuse(self.weights(fs), fs.p, fs.z, self.fusion)
 
 
 @dataclass
@@ -71,14 +73,16 @@ class AdaptResult:
 
 
 def fit_few_shot_weights(p: np.ndarray, y: np.ndarray, w_ref: np.ndarray, w_min: float, scale: float,
-                         step: float = 0.05, reg: float = 0.1) -> np.ndarray:
+                         step: float = 0.05, reg: float = 0.1, fusion: str = "prob",
+                         z: Optional[np.ndarray] = None) -> np.ndarray:
     """Grid search over the bounded simplex for the global weight vector minimising
-    BCE(sum_i w_i p_i, y) + reg * ||w - w_ref||^2 on the support set (L2 anchor to the gating's own weights)."""
+    BCE(fuse(w; p, z), y) + reg * ||w - w_ref||^2 on the support set (L2 anchor to the gating's own weights)."""
     k = int(round(1.0 / step))
     kmin, kmax = int(round(w_min / step)), int(round((w_min + scale) / step))
     grid = np.array([c for c in itertools.product(range(kmin, kmax + 1), repeat=3) if sum(c) == k],
                     dtype=float) * step
-    pf = np.clip(p @ grid.T, 1e-6, 1 - 1e-6)                 # (n, G)
+    pf = sigmoid(calibrated_logits(p, z) @ grid.T) if fusion == "logit" else p @ grid.T
+    pf = np.clip(pf, 1e-6, 1 - 1e-6)                          # (n, G)
     yy = y[:, None].astype(float)
     bce = -(yy * np.log(pf) + (1 - yy) * np.log(1 - pf)).mean(0)
     loss = bce + reg * ((grid - w_ref[None, :]) ** 2).sum(1)
@@ -99,7 +103,7 @@ def adapt(base: GatingController, fit_fs: FeatureSet, fit_y: np.ndarray, sup_fs:
         alpha = min(fc["alpha_cap"], n / fc["anchor_max"])
         w_ref = base.weights(sup_fs).mean(0)
         w_fs = fit_few_shot_weights(sup_fs.p, np.asarray(sup_y), w_ref, g["w_min"], g["scale"],
-                                    fc.get("grid_step", 0.05), fc.get("anchor_reg", 0.1))
+                                    fc.get("grid_step", 0.05), fc.get("anchor_reg", 0.1), base.fusion, sup_fs.z)
         log.info("few-shot anchor update: N=%d alpha=%.2f w_few_shot=%s", n, alpha, np.round(w_fs, 3))
         return AdaptResult(REGIME_ANCHOR, n, alpha, AdaptedModel(base, w_fs, alpha), "adapted", w_fs)
     log.info("few-shot full refit: N=%d > %d (val_gating_fit + support)", n, fc["anchor_max"])
@@ -108,5 +112,5 @@ def adapt(base: GatingController, fit_fs: FeatureSet, fit_y: np.ndarray, sup_fs:
     for _ in range(rep):
         X = X.concat(sup_fs)
     y_all = np.concatenate([np.asarray(fit_y)] + [np.asarray(sup_y)] * rep)
-    new = GatingController(cfg, seed=seed).fit(X, y_all)
+    new = GatingController(cfg, seed=seed, fusion=base.fusion).fit(X, y_all)
     return AdaptResult(REGIME_REFIT, n, 0.0, new, "refit")

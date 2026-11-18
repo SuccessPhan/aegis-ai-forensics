@@ -41,9 +41,9 @@ log = get_logger(__name__)
 DEFAULT_B = 2000          # ASSUMPTION: not in configs/default.yaml; overridable via evaluation.bootstrap.n_resamples
 DEFAULT_SEED = 0          # ASSUMPTION: evaluation.bootstrap.seed
 CHUNK = 200
-BASELINES = ("clip", "dinov2", "freq", "naive_avg", "static_lr", "quality_only")
+BASELINES = ("clip", "dinov2", "freq", "naive_avg", "naive_avg_logit", "static_lr", "quality_only")
 S4_BASELINES = ("static_learned_support", "aegis_noadapt")
-STRONG_POOL = ("clip", "dinov2", "freq", "naive_avg", "static_lr", "static_learned_support")   # quality_only = floor
+STRONG_POOL = ("clip", "dinov2", "freq", "naive_avg", "naive_avg_logit", "static_lr", "static_learned_support")   # quality_only = floor
 METRICS = ("auroc", "accuracy")
 COLUMNS = ["head_variant", "scenario", "level", "generator", "N", "baseline", "metric", "aegis", "baseline_value",
            "delta", "ci_lo", "ci_hi", "p_value", "significant", "n", "n_clusters", "n_seeds", "seed_sd", "B"]

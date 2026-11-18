@@ -87,7 +87,7 @@ def audit_manifest(man: SplitManifest, cfg: Optional[dict] = None, split: Option
 def audit_per_generator(man: SplitManifest, cfg: Optional[dict] = None, split: Optional[str] = None,
                         include_unseen: bool = True) -> Dict[str, AuditResult]:
     """Real vs EACH generator separately on clean images. Seen generators use the seen pool (S1, optionally one
-    split); unseen generators (midjourney, glide) use the clean images of the S4 pools (Real from the S4 pools too).
+    split); unseen generators (midjourney, vqdm) use the clean images of the S4 pools (Real from the S4 pools too).
     Results carry `seen` True/False. Generators with too few samples are skipped (logged)."""
     cfg = cfg or load_config()
     recs = _clean_seen(man, split)

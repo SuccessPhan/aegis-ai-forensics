@@ -5,7 +5,7 @@ from src.data.toy import load_or_build_toy, toy_cache_key
 
 def _small(cfg):
     c = json.loads(json.dumps(cfg))
-    c["toy"]["counts"] = {"adm": 1, "sd_v1_4": 1, "midjourney": 2, "glide": 2, "real": 4}
+    c["toy"]["counts"] = {"adm": 1, "sd_v1_4": 1, "midjourney": 2, "vqdm": 2, "real": 4}
     c["degradation"]["val"]["variants_per_source"] = 0
     c["degradation"]["train_aug"]["variants_per_source"] = 0
     c["degradation"]["test"]["s2_jpeg_quality"] = []

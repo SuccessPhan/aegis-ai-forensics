@@ -18,6 +18,7 @@ from typing import Any, Dict, Optional
 import numpy as np
 
 SEP, FIELD = "::", "##"
+META_KEY = "_meta"
 
 
 def group_key(variant: str, scenario: str, level: Any, generator: Any, N: Any, seed: Any) -> str:
@@ -27,8 +28,9 @@ def group_key(variant: str, scenario: str, level: Any, generator: Any, N: Any, s
 class PredictionSink:
     """Collects (sha256, y, p, weights) per method and slice while the ablation runs."""
 
-    def __init__(self) -> None:
+    def __init__(self, meta: Optional[Dict[str, str]] = None) -> None:
         self.groups: Dict[str, Dict[str, np.ndarray]] = {}
+        self.meta: Dict[str, str] = dict(meta or {})          # e.g. {'fusion': 'logit'}
 
     def add(self, key: str, method: str, sha256, y, p, weights: Optional[np.ndarray] = None) -> None:
         g = self.groups.setdefault(key, {})
@@ -43,7 +45,9 @@ class PredictionSink:
     def save(self, path: str | Path) -> Path:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(path, **{f"{k}{FIELD}{f}": v for k, g in self.groups.items() for f, v in g.items()})
+        arrs = {f"{k}{FIELD}{f}": v for k, g in self.groups.items() for f, v in g.items()}
+        arrs.update({f"{META_KEY}{FIELD}{k}": np.asarray(str(v)) for k, v in self.meta.items()})
+        np.savez_compressed(path, **arrs)
         return path
 
 
@@ -53,7 +57,8 @@ def load_predictions(path: str | Path) -> Dict[str, Dict[str, np.ndarray]]:
     with np.load(Path(path), allow_pickle=False) as z:
         for name in z.files:
             k, f = name.split(FIELD)
-            out.setdefault(k, {})[f] = z[name]
+            if k != META_KEY:
+                out.setdefault(k, {})[f] = z[name]
     return out
 
 
@@ -62,3 +67,9 @@ def parse_key(key: str) -> Dict[str, Any]:
     nn = lambda s: None if s == "-" else s            # noqa: E731
     return {"variant": v, "scenario": sc, "level": nn(lvl), "generator": nn(gen),
             "N": None if n == "-" else int(n), "seed": None if seed == "-" else int(seed)}
+
+
+def load_meta(path: str | Path) -> Dict[str, str]:
+    """Run metadata stored next to the predictions (e.g. {'fusion': 'logit'}); {} for older files."""
+    with np.load(Path(path), allow_pickle=False) as z:
+        return {n.split(FIELD)[1]: str(z[n]) for n in z.files if n.split(FIELD)[0] == META_KEY}

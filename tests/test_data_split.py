@@ -7,7 +7,7 @@ from src.core.contracts import (S4_SPLITS, SPLIT_S4_EVAL, SPLIT_S4_SUPPORT, SPLI
                                 SPLIT_VAL_VERIFY, SPLITS, SplitManifest)
 from src.data.split import assign_splits, check_no_leakage, get_s4_eval_set, get_support_set
 
-UNSEEN = {"midjourney", "glide"}
+UNSEEN = {"midjourney", "vqdm"}
 
 
 def test_toy_has_100_balanced_clean_sources(toy_manifest):
@@ -84,7 +84,7 @@ def test_leakage_checker_has_power(toy_manifest, cfg):
     bad = SplitManifest(copy.deepcopy(toy_manifest.records), toy_manifest.seed, toy_manifest.root)
     tr = next(r for r in bad.records if r.split == SPLIT_TRAIN and r.is_clean)
     tr.split = SPLIT_TEST                      # same group now spans two splits (variants none for train)
-    g = next(r for r in bad.records if r.generator == "glide")
+    g = next(r for r in bad.records if r.generator == "vqdm")
     g.split = SPLIT_TRAIN                      # unseen generator in train
     assert len(check_no_leakage(bad, cfg)) >= 1
     ok = assign_splits(copy.deepcopy([r for r in toy_manifest.records if r.is_clean]), cfg)

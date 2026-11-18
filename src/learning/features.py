@@ -51,16 +51,18 @@ class FeatureSet:
     X: np.ndarray        # (n,12) standardised gating input
     p: np.ndarray        # (n,3) calibrated P(fake) per expert
     mean_ood: np.ndarray  # (n,) mean raw cosdist (flag criterion)
+    z: Optional[np.ndarray] = None  # (n,3) calibrated logits = raw logit / T (None -> derived from p)
 
     def __len__(self) -> int:
         return len(self.X)
 
     def subset(self, sel) -> "FeatureSet":
-        return FeatureSet(self.X[sel], self.p[sel], self.mean_ood[sel])
+        return FeatureSet(self.X[sel], self.p[sel], self.mean_ood[sel], None if self.z is None else self.z[sel])
 
     def concat(self, o: "FeatureSet") -> "FeatureSet":
         return FeatureSet(np.concatenate([self.X, o.X]), np.concatenate([self.p, o.p]),
-                          np.concatenate([self.mean_ood, o.mean_ood]))
+                          np.concatenate([self.mean_ood, o.mean_ood]),
+                          None if self.z is None or o.z is None else np.concatenate([self.z, o.z]))
 
 
 class FeaturePipeline:
@@ -92,4 +94,5 @@ class FeaturePipeline:
         if not self.use_ood:
             X[:, :9] = 0.0
         assert X.shape[1] == GATING_DIM
-        return FeatureSet(X.astype(np.float32), self.calibrator.transform(b.logits), b.mean_ood)
+        z = b.logits / self.calibrator.T[None, :]
+        return FeatureSet(X.astype(np.float32), self.calibrator.transform(b.logits), b.mean_ood, z)

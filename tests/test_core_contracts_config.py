@@ -41,7 +41,7 @@ def test_manifest_json_roundtrip(tmp_path):
 
 
 def test_config_values_from_brief(cfg):
-    assert get(cfg, "data.generators.unseen") == ["midjourney", "glide"]
+    assert get(cfg, "data.generators.unseen") == ["midjourney", "vqdm"]
     assert get(cfg, "data.normalize.crop_size") == 224
     assert get(cfg, "data.normalize.jpeg_harmonize") is True
     assert get(cfg, "degradation.val.jpeg_quality_range") == [30, 95]

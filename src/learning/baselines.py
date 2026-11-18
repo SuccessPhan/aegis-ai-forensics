@@ -6,6 +6,7 @@ from sklearn.linear_model import LogisticRegression
 
 from src.core.contracts import EXPERT_NAMES
 from src.learning.features import FeatureSet
+from src.learning.fusion import calibrated_logits, sigmoid
 
 
 class SingleExpert:
@@ -21,18 +22,30 @@ class NaiveAverage:
         return fs.p.mean(axis=1)
 
 
-class StaticLearnedWeights:
-    """Logistic-regression stacking on p_cal, fit on val_gating_fit only; weights fixed across samples."""
+class NaiveAverageLogit:
+    """sigmoid(mean_i calibrated logit_i). Reported only when gating.fusion = "logit"."""
 
-    def __init__(self, C: float = 1.0):
+    def predict(self, fs: FeatureSet) -> np.ndarray:
+        return sigmoid(calibrated_logits(fs.p, fs.z).mean(axis=1))
+
+
+class StaticLearnedWeights:
+    """Logistic-regression stacking, fit on val_gating_fit only; weights fixed across samples.
+    fusion="prob": LR on p_cal (original). fusion="logit": LR on the calibrated logits l_i."""
+
+    def __init__(self, C: float = 1.0, fusion: str = "prob"):
         self.lr = LogisticRegression(C=C, max_iter=500)
+        self.fusion = fusion
+
+    def _x(self, fs: FeatureSet) -> np.ndarray:
+        return calibrated_logits(fs.p, fs.z) if self.fusion == "logit" else fs.p
 
     def fit(self, fs: FeatureSet, y: np.ndarray) -> "StaticLearnedWeights":
-        self.lr.fit(fs.p, y)
+        self.lr.fit(self._x(fs), y)
         return self
 
     def predict(self, fs: FeatureSet) -> np.ndarray:
-        return self.lr.predict_proba(fs.p)[:, 1]
+        return self.lr.predict_proba(self._x(fs))[:, 1]
 
 
 class QualityOnly:

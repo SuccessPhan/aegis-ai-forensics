@@ -58,7 +58,7 @@ def test_toy_resize_crop_pipeline_and_audit_per_generator(toy_manifest_resize_cr
     assert sizes == {(224, 224)}
     assert all(r.provenance["normalize_mode"] == "resize_crop" for r in man.records if r.is_clean)
     per = audit_per_generator(man, cfg)
-    assert {"adm", "sd_v1_4"} <= set(per) <= {"adm", "sd_v1_4", "midjourney", "glide"}
+    assert {"adm", "sd_v1_4"} <= set(per) <= {"adm", "sd_v1_4", "midjourney", "vqdm"}
     assert all(per[g].seen is (g in ("adm", "sd_v1_4")) for g in per)
     full = audit_full(man, cfg)
     assert set(full["per_generator"]) == set(per)
@@ -88,7 +88,7 @@ def test_audit_full_flags_generator_shortcut(toy_manifest, cfg, monkeypatch):
 
 def _raw_tree(root: Path, n=3):
     rng = np.random.default_rng(1)
-    for gen in ("adm", "sd_v1_4", "midjourney", "glide"):
+    for gen in ("adm", "sd_v1_4", "midjourney", "vqdm"):
         for kind in ("ai", "nature"):
             d = root / gen / kind
             d.mkdir(parents=True)
