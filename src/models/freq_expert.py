@@ -120,6 +120,24 @@ class ImagePathDataset(Dataset):
         return x, torch.tensor(float(self.labels[i]))
 
 
+@torch.no_grad()
+def recalibrate_bn(expert: FreqExpert, dataset: Dataset, cfg: dict, device: str | torch.device = "cpu") -> None:
+    """Re-estimate BatchNorm running stats as an exact cumulative mean over one pass of `dataset` with the FINAL
+    weights (no weight update). The EMA left by the last SGD steps lags the weights; with SRM residual inputs
+    (heavy-tailed, tiny activations) that lag made eval-mode inference collapse (AUROC ~0.5 vs 0.95 in train mode)."""
+    bns = [m for m in expert.net.modules() if isinstance(m, nn.BatchNorm2d)]
+    for m in bns:
+        m.reset_running_stats()
+        m.momentum = None  # cumulative moving average
+    expert.net.train()
+    for x, _ in DataLoader(dataset, batch_size=int(cfg["experts"]["freq"]["train"]["batch_size"]), shuffle=False):
+        expert.net(expert._transform(x.to(device)))
+    for m in bns:
+        m.momentum = 0.1
+    log.info("freq BN running stats recalibrated on %d samples (%s input)", len(dataset), expert.input_mode)
+    expert.net.eval()
+
+
 def train_freq(expert: FreqExpert, dataset: Dataset, cfg: dict, device: str | torch.device = "cpu") -> list:
     """Train the Frequency CNN from scratch on (clean) train_experts. Returns per-epoch mean loss."""
     tc = cfg["experts"]["freq"]["train"]
@@ -141,5 +159,7 @@ def train_freq(expert: FreqExpert, dataset: Dataset, cfg: dict, device: str | to
             cnt += len(y)
         history.append(tot / max(cnt, 1))
         log.info("freq epoch %d/%d loss=%.4f", ep + 1, tc["epochs"], history[-1])
+    if expert.input_mode == "srm":  # log_magnitude_fft path intentionally untouched (numerics frozen)
+        recalibrate_bn(expert, dataset, cfg, device)
     expert.net.eval()
     return history
