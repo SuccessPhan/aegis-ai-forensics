@@ -45,7 +45,7 @@ def test_normalize_png_224_and_no_resize(tmp_path, cfg):
     src = tmp_path / "raw.png"
     raw = _noise_img(rng, 301, 277)
     raw.save(src)
-    cfg2 = {**cfg, "data": {**cfg["data"], "normalize": {**cfg["data"]["normalize"], "jpeg_harmonize": False}}}
+    cfg2 = {**cfg, "data": {**cfg["data"], "normalize": {**cfg["data"]["normalize"], "jpeg_harmonize": False, "mode": "crop"}}}
     dst = tmp_path / "out.png"
     prov = normalize_image(src, dst, is_real=False, cfg=cfg2)
     with Image.open(dst) as im:
@@ -61,7 +61,7 @@ def test_jpeg_harmonize_adds_jpeg_history_to_fake_only(tmp_path, cfg):
     src = tmp_path / "raw.png"
     _noise_img(rng, 256, 256).save(src)
     on = {**cfg, "data": {**cfg["data"], "normalize": {**cfg["data"]["normalize"], "jpeg_harmonize": True}}}
-    off = {**cfg, "data": {**cfg["data"], "normalize": {**cfg["data"]["normalize"], "jpeg_harmonize": False}}}
+    off = {**cfg, "data": {**cfg["data"], "normalize": {**cfg["data"]["normalize"], "jpeg_harmonize": False, "mode": "crop"}}}
     p_on = normalize_image(src, tmp_path / "on.png", is_real=False, cfg=on, quality_pool=[50])
     p_off = normalize_image(src, tmp_path / "off.png", is_real=False, cfg=off, quality_pool=[50])
     p_real = normalize_image(src, tmp_path / "real.png", is_real=True, cfg=on, quality_pool=[50])

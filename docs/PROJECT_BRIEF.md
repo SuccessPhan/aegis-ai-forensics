@@ -128,3 +128,21 @@ Căn cứ: `docs/research/METHOD_SPECS.md` (research-analyst). Người dùng ch
 3. **Expert 3 — chọn theo validation.** Train cả `log_magnitude_fft` và `srm`; chọn biến thể có AUROC cao hơn trên `val_gating_fit`; báo cáo cả hai.
 4. **Báo cáo S4 tách riêng Midjourney và GLIDE**, vì GLIDE có thể không đủ OOD (ADM — thuộc nhóm Seen — chuyển sang GLIDE đạt 97,1% trong GenImage Bảng 3).
 5. **Không dùng Energy score** (không có căn cứ cho head nhị phân một logit — METHOD_SPECS câu d).
+
+## 7. Kết quả audit trên dữ liệu thật & quyết định (2026-11-18)
+
+Audit (LR chỉ trên 3 đặc trưng chất lượng, ảnh sạch, 16.000 ảnh GenImage):
+
+| AUROC | `crop` | `resize_crop` |
+|---|---|---|
+| Tổng | 0.706 | 0.631 |
+| Real vs ADM | 0.761 | 0.751 |
+| Real vs SD v1.4 | 0.663 | 0.638 |
+
+- `jpeg_harmonize` có hiệu quả: AUROC riêng của `jpeg_quality_est` chỉ 0.54–0.62.
+- Đường tắt còn lại là **lịch sử thu nhỏ ảnh**: ảnh Real (~500 px) và SD (512 px) cùng bị thu nhỏ ~2× trong `resize_crop` nên SD gần sạch (từng đặc trưng 0.53–0.56); ADM (256 px gốc) không bị thu nhỏ nên mềm hơn ảnh Real (độ sắc nét 0.72, tần số cao 0.70). Một phần chênh lệch có thể là khác biệt thật giữa ảnh chụp và ảnh AI.
+
+**Quyết định của người dùng:**
+1. Dùng **`resize_crop`**.
+2. Trên dữ liệu thật, audit **được báo cáo** theo từng generator (cả seen lẫn unseen), không còn là cổng chặn cứng. Thêm baseline **`quality_only`** (cùng LR trên 3 đặc trưng chất lượng, fit trên `val_gating_fit`) vào mọi bảng ablation làm **mức sàn**: mọi phương pháp phải vượt xa mức này. Ghi rõ hạn chế của ADM trong báo cáo.
+3. **Cân bằng 50/50 Real/AI trong mọi split** (ảnh Real được phân bổ theo số ảnh AI của từng split; trước đó Real nhiều gấp ~1,8 lần do ảnh Real từ thư mục Midjourney/GLIDE dồn vào các tập seen). 137 ảnh Real nhỏ hơn 224 px bị loại.

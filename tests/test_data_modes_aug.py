@@ -58,11 +58,13 @@ def test_toy_resize_crop_pipeline_and_audit_per_generator(toy_manifest_resize_cr
     assert sizes == {(224, 224)}
     assert all(r.provenance["normalize_mode"] == "resize_crop" for r in man.records if r.is_clean)
     per = audit_per_generator(man, cfg)
-    assert per and set(per) <= {"adm", "sd_v1_4"}          # seen generators only, one result each
+    assert {"adm", "sd_v1_4"} <= set(per) <= {"adm", "sd_v1_4", "midjourney", "glide"}
+    assert all(per[g].seen is (g in ("adm", "sd_v1_4")) for g in per)
     full = audit_full(man, cfg)
     assert set(full["per_generator"]) == set(per)
     assert full["passed"] == (full["pooled_passed"] and not full["failed_generators"])
-    assert full["status"] in ("pass", "fail")
+    assert full["status"] == "reported"           # shortcut_audit.enforce is false by default
+    assert full["passed"] == (full["pooled_passed"] and not full["failed_generators"])
 
 
 def test_audit_full_flags_generator_shortcut(toy_manifest, cfg, monkeypatch):
@@ -77,6 +79,8 @@ def test_audit_full_flags_generator_shortcut(toy_manifest, cfg, monkeypatch):
         return res
 
     monkeypatch.setattr(sa, "_audit_records", fake)
+    cfg = copy.deepcopy(cfg)
+    cfg["shortcut_audit"]["enforce"] = True
     full = sa.audit_full(toy_manifest, cfg)
     assert full["pooled_passed"] is True and full["failed_generators"] == ["adm"]
     assert full["passed"] is False and full["status"] == "fail"
