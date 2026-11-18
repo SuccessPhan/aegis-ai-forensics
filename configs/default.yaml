@@ -1,0 +1,153 @@
+# AEGIS - single source of truth for hyperparameters (PROJECT_BRIEF v2.0, section 5).
+seed: 42
+
+paths:
+  # Project-normalised GenImage layout: <raw_root>/<generator>/{ai,nature}/ (see src/data/ingest.py).
+  # Real images come from each generator's nature/ dir, so there is no separate real dir.
+  raw_root: "data/raw/genimage"
+  data_root: "data"
+  normalized_dir: "data/normalized"
+  manifest: "data/normalized/manifest.json"
+  cache_dir: "data/cache"
+  toy_dir: "data/toy"
+  pdf_dir: "docs/pdfs"
+  raw_papers_dir: "docs/raw_papers"
+
+data:
+  generators:
+    seen: ["adm", "sd_v1_4"]            # train_experts, val_gating, S1/S2/S3
+    unseen: ["midjourney", "glide"]     # S4 only, sealed from train_experts / val_gating
+    excluded: ["biggan", "cifake"]      # BigGAN 128px not normalizable; CIFAKE only for pipeline smoke tests
+  real_name: "real"
+  target_size_total: [12000, 16000]
+  normalize:
+    crop_size: 224
+    format: "png"
+    png_compress_level: 0               # uncompressed PNG
+    crop_offset_multiple: 8             # keep the JPEG 8x8 grid aligned
+    min_source_size: 224
+    jpeg_harmonize: true                # compress AI images once at a Q drawn from the Real Q distribution
+    harmonize_fallback_quality_range: [70, 95]   # ASSUMPTION: used only if no Real Q pool is available
+    harmonize_quality_clip: [30, 98]
+
+split:
+  ratios: {train_experts: 0.6, val_gating: 0.2, test_benchmark: 0.2}
+  val_fit_frac: 0.7                     # val_gating_fit vs val_gating_verify
+  s4:
+    support_pool_frac: 0.2              # of each unseen generator -> support pool; rest -> eval pool
+    support_pool_min: 10
+    real_support_frac: 0.05             # separate Real store for support sets
+    real_eval_frac: 0.05
+    real_min: 10
+
+degradation:
+  val:                                  # continuous random, val_gating only
+    jpeg_quality_range: [30, 95]
+    blur_sigma_range: [0.5, 3.0]
+    resize_factor_range: null           # no resize in val_gating (brief 5.5)
+    variants_per_source: 2
+    kinds: ["jpeg", "blur"]
+  test:                                 # fixed levels, test_benchmark
+    s2_jpeg_quality: [85, 65, 40]
+    s3_resize: {factor: 0.5, interpolation: "bilinear"}   # downscale then upscale back
+    s3_blur: [{kernel: 11, sigma: 1.5}, {kernel: 17, sigma: 2.5}]
+
+quality_features:
+  blockiness_block: 8
+  blockiness_scale: 1.0                 # blockiness at which jpeg_quality_est reaches 0 (heuristic; probed on synthetic images, re-tune on real data)
+  hf_cutoff: 0.25                       # cycles/pixel (Nyquist = 0.5)
+  laplacian_eps: 1.0e-8
+
+shortcut_audit:
+  tolerance: 0.05                       # accuracy and AUROC must be within 0.5 +/- tolerance
+  cv_folds: 5
+  seed: 42
+
+experts:
+  names: ["clip", "dinov2", "freq"]
+  clip:
+    model_id: "openai/clip-vit-large-patch14"     # UnivFD backbone (brief 5.2)
+    fallback_model_id: "openai/clip-vit-base-patch16"
+    feature_dim: 768
+  dinov2:
+    model_id: "facebook/dinov2-base"
+    feature_dim: 768
+  freq:
+    input: "log_magnitude_fft"                    # alternative: "srm"
+    channels: [32, 64, 128, 256]                  # 4 blocks; target ~1.2M params (brief 5.2)
+    train:                                        # ASSUMPTION: initial values
+      epochs: 10
+      lr: 0.001
+      weight_decay: 0.0001
+      batch_size: 64
+  head:                                           # linear head on frozen CLIP/DINOv2 features, clean train_experts only
+    type: "linear"
+    epochs: 30                                    # ASSUMPTION
+    lr: 0.001                                     # ASSUMPTION
+    weight_decay: 0.0001                          # ASSUMPTION
+    batch_size: 256
+  extract:
+    batch_size: 32
+    dtype: "float16"
+    cache_version: "v1"                           # part of the cache key (sha256 + expert + version)
+    save_every: 20                                # ASSUMPTION: flush cache every N batches (code default in extract_records)
+
+ood:
+  entropy: true
+  cosine_reference: "train_experts_clean_centroid"  # per-expert centroid of clean train_experts features
+  centroid_file: "centroids_v1.pt"                # ASSUMPTION: code currently derives centroids_<cache_version>.pt (src/ood/profiler.py)
+
+calibration:
+  method: "temperature"                           # per expert
+  fit_split: "val_gating_fit"
+
+gating_train:                                     # ASSUMPTION: initial values, tuned on val_gating_fit only
+  epochs: 100
+  lr: 0.001
+  weight_decay: 0.0001
+  batch_size: 256
+
+evaluation:
+  scenarios: ["S1", "S2", "S3", "S4"]
+  ece_bins: 15
+  methods: ["clip", "dinov2", "freq", "naive_average", "static_learned", "aegis"]
+  champion_challenger:
+    split: "val_gating_verify"                    # NEVER test_benchmark
+    primary_metric: "auroc"
+    min_improvement: 0.0                          # ASSUMPTION: challenger must be strictly better
+    max_ece_increase: 0.01                        # ASSUMPTION: guard against calibration regression
+    rollback_primary_tolerance: 0.01              # ASSUMPTION: allowed primary-metric drop before rollback
+
+gating:
+  input_dim: 12
+  hidden_dim: 32
+  num_experts: 3
+  dropout: 0.2
+  w_min: 0.05
+  scale: 0.85                           # w = w_min + scale * softmax(z); sum = 1, w_i in [0.05, 0.90]
+  entropy_reg_lambda: 0.01              # ASSUMPTION: initial value, tunable on val_gating_fit
+
+fewshot:
+  n_values: [5, 20, 100]
+  conservative_below: 10                # N < 10 -> alpha = 0
+  anchor_max: 50                        # 10 <= N <= 50 -> anchor update; N > 50 -> full refit
+  alpha_cap: 0.6                        # alpha = min(alpha_cap, N / anchor_max)
+  anchor_reg: 0.1                       # ASSUMPTION: regularisation toward w_base when searching w_few_shot
+  grid_step: 0.05                       # ASSUMPTION: simplex grid step for w_few_shot search
+  support_repeat: 1                     # ASSUMPTION: oversample support set when refitting (N > 50)
+
+flags:
+  conflict_high: 0.80
+  conflict_low: 0.20
+  conflict_std: 0.30
+  uncertain_low: 0.40
+  uncertain_high: 0.60
+  ood_percentile: 95
+
+toy:
+  n_total: 100
+  counts: {adm: 15, sd_v1_4: 15, midjourney: 10, glide: 10, real: 50}
+  raw_size_range: [256, 340]
+  # Toy is tiny, so S4 pools are made larger than for real data.
+  split_overrides:
+    s4: {support_pool_frac: 0.5, support_pool_min: 4, real_support_frac: 0.2, real_eval_frac: 0.2, real_min: 10}
