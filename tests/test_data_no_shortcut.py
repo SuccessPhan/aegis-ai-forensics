@@ -60,7 +60,7 @@ def test_audit_full_reported_and_has_unseen(toy_manifest, cfg):
     assert full["status"] == "reported" and isinstance(full["passed"], bool)
     pg = full["per_generator"]
     assert {g for g, r in pg.items() if r["seen"]} == {"adm", "sd_v1_4"}
-    assert {g for g, r in pg.items() if r["seen"] is False} == {"midjourney", "glide"}
+    assert {g for g, r in pg.items() if r["seen"] is False} == {"midjourney", "vqdm"}
     c = copy.deepcopy(cfg)
     c["shortcut_audit"]["enforce"] = True
     assert audit_full(toy_manifest, c)["status"] in ("pass", "fail")

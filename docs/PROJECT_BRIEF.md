@@ -165,3 +165,9 @@ Nguồn: `reports/v1` (ablation), `reports/v2` (bootstrap CI theo cụm ảnh g�
 3. **Mức trần oracle** (trọng số cố định tốt nhất cho từng mức suy giảm, dò trên chính lát test — cận trên lạc quan): AEGIS cách oracle chỉ 0.001–0.011 AUROC ở mọi mức S1–S3. ⇒ Bộ điều phối đã gần tối ưu trong họ "trung bình có trọng số"; giới hạn còn lại nằm ở **chất lượng expert**, không ở định tuyến. Cải tiến bộ đo JPEG bị loại bỏ vì dư địa < 0.01.
 
 **Lưu ý toàn vẹn:** `test_benchmark` đã được xem ở v1/v2. Mọi thay đổi hệ thống từ đây phải được chọn **chỉ trên `val_gating_verify`** và phải ghi rõ trong báo cáo là đã có một vòng xem kết quả test trước khi thay đổi.
+
+## 9. Vòng cải tiến thứ nhất (quyết định của người dùng, 2026-11-18)
+
+1. **Thay GLIDE bằng VQDM** làm generator unseen thứ hai (cùng nguồn `genimage_test.zip`, 2.000 AI + 2.000 Real). Lý do: GLIDE tách được 0.979 AUROC chỉ bằng 3 đặc trưng chất lượng ⇒ không phải bài kiểm tra OOD có ý nghĩa. Unseen = Midjourney + VQDM. VQDM cũng phải được audit; nếu cũng tách quá dễ thì báo cáo trung thực.
+2. **Thử trộn theo logit** (`gating.fusion: logit`, $P = \sigma(\sum w_i \ell_i)$) như một họ trộn khác ngoài trung bình xác suất. Lựa chọn prob/logit được quyết định **chỉ trên `val_gating_verify`** (Δ AUROC > 0 với CI 95% không chứa 0 và ECE không xấu đi quá `max_ece_increase`).
+3. Vì đổi dữ liệu, toàn bộ pipeline chạy lại (ingest → embedding → head → bundle → chọn fusion → ablation v3). Split mới khác split v1/v2. **Báo cáo phải ghi rõ** các quyết định thiết kế ở §6–§9 đã được đưa ra sau khi xem kết quả test v1/v2.

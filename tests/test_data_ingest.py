@@ -12,7 +12,7 @@ from src.core.contracts import LABEL_FAKE, LABEL_REAL, SplitManifest
 from src.data.ingest import IngestError, main, scan_genimage
 
 N = 6
-GENS = ["adm", "sd_v1_4", "midjourney", "glide"]
+GENS = ["adm", "sd_v1_4", "midjourney", "vqdm"]
 
 
 def _img(path: Path, seed: int, fmt: str):
@@ -22,12 +22,12 @@ def _img(path: Path, seed: int, fmt: str):
 
 
 def _make_tree(root: Path, n: int) -> Path:
-    for gi, gen in enumerate(GENS + ["biggan"]):
+    for gi, gen in enumerate(GENS + ["biggan", "glide"]):
         for i in range(n):
             _img(root / gen / "ai" / f"{i}.png", 1000 * gi + i, "PNG")
             _img(root / gen / "nature" / f"{i}.JPEG", 100 * gi + i + 50000, "JPEG")
     # the same Real image under two different generators
-    shutil.copy(root / "adm" / "nature" / "0.JPEG", root / "glide" / "nature" / "dup.JPEG")
+    shutil.copy(root / "adm" / "nature" / "0.JPEG", root / "vqdm" / "nature" / "dup.JPEG")
     return root
 
 
@@ -42,7 +42,7 @@ def test_scan_filters_and_extensions(tree, cfg):
     assert len(items) == 4 * 2 * N + 1
     assert all(i.label == (LABEL_REAL if i.generator == "real" else LABEL_FAKE) for i in items)
     assert any(i.path.suffix == ".JPEG" for i in items)
-    assert not any("biggan" in i.path.parts for i in items)
+    assert not any(p in i.path.parts for i in items for p in ("biggan", "glide"))
 
 
 def test_max_per_class_balanced_and_seeded(tree, cfg):
@@ -75,10 +75,10 @@ def test_cli_end_to_end(tmp_path, cfg):
     man = SplitManifest.load(out / "manifest.json")
     clean = [r for r in man.records if r.is_clean]
     assert len(clean) == 4 * 2 * n          # the duplicated Real was dropped
-    assert not any(r.generator == "biggan" for r in man.records)
+    assert not any(r.generator in ("biggan", "glide") for r in man.records)
     assert all(r.generator == "real" for r in clean if r.label == LABEL_REAL)
     # unseen generators only in S4 pools; Real from unseen dirs is ordinary Real (main splits possible)
-    assert {r.split for r in clean if r.generator in ("midjourney", "glide")} <= {"s4_support", "s4_eval"}
+    assert {r.split for r in clean if r.generator in ("midjourney", "vqdm")} <= {"s4_support", "s4_eval"}
     assert any(r.label == LABEL_REAL and r.split in ("train_experts", "val_gating_fit", "test_benchmark")
                for r in clean)
     rep = json.loads((out / "shortcut_audit.json").read_text())

@@ -25,20 +25,22 @@ from src.core.contracts import EXPERT_NAMES
 from src.core.logger import get_logger
 from src.evaluation.metrics import compute_metrics
 from src.evaluation.predictions import PredictionSink, group_key
-from src.learning.baselines import NaiveAverage, QualityOnly, SingleExpert, StaticLearnedWeights
+from src.learning.baselines import NaiveAverage, NaiveAverageLogit, QualityOnly, SingleExpert, StaticLearnedWeights
 from src.learning.bundle_io import Bundle
 from src.learning.features import FeaturePipeline
 from src.learning.fewshot import adapt, select_support
 from src.learning.flags import compute_flags, fit_ood_threshold
+from src.learning.fusion import get_fusion
 from src.learning.gating import GatingController
 
 log = get_logger(__name__)
 
-METHODS = ("clip", "dinov2", "freq", "naive_avg", "static_lr", "quality_only", "aegis")
+METHODS = ("clip", "dinov2", "freq", "naive_avg", "naive_avg_logit", "static_lr", "quality_only", "aegis")
+# naive_avg_logit exists only when gating.fusion = "logit" (naive_avg stays the probability mean, a fixed baseline)
 FLOOR = "quality_only"
 S4_ONLY_METHODS = ("static_learned_support",)    # S4 only, variants full/nocal, per N and seed
 _NUM = ("accuracy", "precision", "recall", "f1", "auroc", "ece", "selective_accuracy", "flagged_rate")
-COLUMNS = ["head_variant", "scenario", "level", "generator", "N", "method", "variant", "n", *_NUM]
+COLUMNS = ["head_variant", "fusion", "scenario", "level", "generator", "N", "method", "variant", "n", *_NUM]
 
 
 class _System:
@@ -51,9 +53,12 @@ class _System:
         self.fit_y = fit.label
         self.thr = fit_ood_threshold(fit.mean_ood, cfg)
         self.models: Dict[str, Any] = {e: SingleExpert(e) for e in EXPERT_NAMES}
+        self.fusion = get_fusion(cfg)
         self.models["naive_avg"] = NaiveAverage()
-        self.models["static_lr"] = StaticLearnedWeights().fit(self.fit_fs, fit.label)
-        self.gating = GatingController(cfg, seed=seed).fit(self.fit_fs, fit.label)
+        if self.fusion == "logit":
+            self.models["naive_avg_logit"] = NaiveAverageLogit()
+        self.models["static_lr"] = StaticLearnedWeights(fusion=self.fusion).fit(self.fit_fs, fit.label)
+        self.gating = GatingController(cfg, seed=seed, fusion=self.fusion).fit(self.fit_fs, fit.label)
         self.models["quality_only"] = QualityOnly().fit(fit)
         self.models["aegis"] = self.gating
         self.seed = seed
@@ -78,7 +83,7 @@ def fit_static_with_support(fit_fs, fit_y, sup_fs, sup_y, cfg: Config) -> Static
     for _ in range(rep):
         X = X.concat(sup_fs)
     y_all = np.concatenate([np.asarray(fit_y)] + [np.asarray(sup_y)] * rep)
-    return StaticLearnedWeights().fit(X, y_all)
+    return StaticLearnedWeights(fusion=get_fusion(cfg)).fit(X, y_all)
 
 
 def _mean_reports(reps):
@@ -126,7 +131,7 @@ def run_ablation(cfg: Config, fit: Bundle, test: Bundle, s4_support: Optional[Bu
     for vname, (cal, ood) in variants.items():
         sysm = _System(cfg, fit, cal, ood, seed)
         sysm.sink = sink
-        methods = METHODS if vname in ("full", "nocal") else ("aegis",)
+        methods = tuple(m for m in METHODS if m in sysm.models) if vname in ("full", "nocal") else ("aegis",)
         for sc, lvl, b in _slices(test):
             fs = sysm.pipe.transform(b)
             for m in methods:
@@ -144,8 +149,10 @@ def run_ablation(cfg: Config, fit: Bundle, test: Bundle, s4_support: Optional[Bu
                 ev, sup_b = _gen_bundle(s4_eval, gen, ev_real[gen]), _gen_bundle(s4_support, gen, sup_real[gen])
             reports += _s4_reports(cfg, sysm, vname, methods, sup_b, ev, gname, gen, n_values, s4_seeds)
     rows = [_flatten(r) for r in reports]
+    fusion = get_fusion(cfg)
     for r in rows:
         r["head_variant"] = head_variant
+        r["fusion"] = fusion
     if out_dir is not None:
         write_tables(rows, out_dir)
     return rows
@@ -225,7 +232,7 @@ def _fmt(v: Any) -> str:
     return "" if v is None else (f"{v:.4f}" if isinstance(v, float) else str(v))
 
 
-BASELINES = ("clip", "dinov2", "freq", "naive_avg", "static_lr", "static_learned_support")
+BASELINES = ("clip", "dinov2", "freq", "naive_avg", "naive_avg_logit", "static_lr", "static_learned_support")
 
 
 def _isnum(v) -> bool:
@@ -288,7 +295,7 @@ def _main_table(rows: List[Dict[str, Any]], title: str) -> List[str]:
 
 
 def _long_table(rows: List[Dict[str, Any]]) -> List[str]:
-    cols = [c for c in COLUMNS if c != "head_variant"]
+    cols = [c for c in COLUMNS if c not in ("head_variant", "fusion")]
     return ["## All metrics (long format)", "", "| " + " | ".join(cols) + " |", "|" + "---|" * len(cols),
             *("| " + " | ".join(_fmt(r.get(c)) for c in cols) + " |" for r in rows)]
 
@@ -363,7 +370,7 @@ def run_all(cfg: Config, head_variants: Optional[Sequence[str]] = None, out_dir:
     rows: List[Dict[str, Any]] = []
     for hv in hvs:
         b = {s: load_split(cfg, s, hv) for s in REQUIRED_SPLITS}
-        sink = PredictionSink() if save_predictions else None
+        sink = PredictionSink({"fusion": get_fusion(cfg)}) if save_predictions else None
         rows += run_ablation(cfg, b["val_gating_fit"], b["test_benchmark"], b["s4_support"], b["s4_eval"],
                              s4_seeds=s4_seeds, head_variant=hv, sink=sink)
         if sink is not None:
