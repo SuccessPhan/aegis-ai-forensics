@@ -1,0 +1,16 @@
+# AEGIS - data-layer dependencies (work package #1).
+# NOTE: torch / torchvision / open_clip / transformers (expert backbones, gating) are NOT listed yet;
+# they will be added by the expert/gating work packages.
+numpy
+pillow
+scipy
+scikit-learn
+pyyaml
+pytest
+pymupdf
+# Experts / gating (installed with the CUDA 12.8 index on RTX 4060):
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+torch
+torchvision
+transformers
+safetensors
