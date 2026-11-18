@@ -7,7 +7,7 @@ paths:
   raw_root: "data/raw/genimage"
   data_root: "data"
   normalized_dir: "data/normalized"
-  manifest: "data/normalized/manifest.json"
+  manifest: "data/normalized_v1/manifest.json"
   cache_dir: "data/cache"
   toy_dir: "data/toy"
   pdf_dir: "docs/pdfs"
@@ -124,6 +124,9 @@ evaluation:
   head_variants: ["clean", "aug"]
   methods: ["clip", "dinov2", "freq", "naive_avg", "static_lr", "aegis"]   # names as used in src/evaluation/ablation.py
   s4_only_methods: ["static_learned_support"]   # refit on val_gating_fit + the same support set as AEGIS
+  bootstrap:                                    # paired bootstrap for significance (src/evaluation/significance.py)
+    n_resamples: 2000
+    seed: 0
   champion_challenger:
     split: "val_gating_verify"                    # NEVER test_benchmark
     primary_metric: "auroc"

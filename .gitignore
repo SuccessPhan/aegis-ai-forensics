@@ -226,3 +226,6 @@ __marimo__/
 /data/
 /docs/pdfs/
 /.venv/
+
+# Per-sample predictions are large (~128 MB per run); regenerate with --save-predictions
+/reports/*/predictions/
