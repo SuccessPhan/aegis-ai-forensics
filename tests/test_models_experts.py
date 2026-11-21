@@ -78,7 +78,7 @@ def test_extract_resume_and_head_training(cfg, toy_manifest, tmp_path):
     cache2 = FeatureCache.open(c, "dinov2")  # reload from disk
     assert len(cache2) == 12 and cache2.data[recs[0].sha256].dtype == torch.float16
     assert extract_records(ex, toy_manifest, recs, cache2, batch_size=5) == 0  # resume: nothing to do
-    assert "v1" in str(cache.path)
+    assert c["experts"]["extract"]["cache_version"] in str(cache.path)
 
     feats = cache2.features_for([r.sha256 for r in recs])
     y = torch.tensor([r.label for r in recs])
