@@ -47,7 +47,8 @@ def test_models_variant_file_names_and_centroid_clean_only(cfg, toy_manifest, tm
     cent_clean = load_centroids(c)["clip"].clone()
     pa = train_expert_from_manifest(toy_manifest, "clip", c, variant="aug")
     assert pc != pa and pc.exists() and pa.exists()
-    assert pc.name == "clip_clean_v1.pt" and pa.name == "clip_aug_v1.pt"
+    v = c["experts"]["extract"]["cache_version"]  # file names follow the configured cache version
+    assert pc.name == f"clip_clean_{v}.pt" and pa.name == f"clip_aug_{v}.pt"
     # centroid = mean of CLEAN train_experts features, identical for both variants
     cache = FeatureCache.open(c, "clip")
     clean = train_records(toy_manifest, "clean")
@@ -58,7 +59,7 @@ def test_models_variant_file_names_and_centroid_clean_only(cfg, toy_manifest, tm
     a = torch.load(pa, weights_only=True)["state"]["mean"]
     b = torch.load(pc, weights_only=True)["state"]["mean"]
     assert not torch.allclose(a, b)
-    assert head_path(c, "freq", "aug", "srm").name == "freq_srm_aug_v1.pt"
+    assert head_path(c, "freq", "aug", "srm").name == f"freq_srm_aug_{v}.pt"
     assert head_path(c, "freq", "aug", "log_magnitude_fft") != head_path(c, "freq", "aug", "srm")
 
 
@@ -100,7 +101,8 @@ def test_models_freq_variants_and_bundle_subdir(cfg, toy_manifest, tmp_path, mon
         train_expert_from_manifest(toy_manifest, name, c, variant="aug")
     p_srm = train_expert_from_manifest(toy_manifest, "freq", c, variant="aug", freq_input="srm")
     p_fft = train_expert_from_manifest(toy_manifest, "freq", c, variant="aug", freq_input="log_magnitude_fft")
-    assert p_srm.name == "freq_srm_aug_v1.pt" and p_fft.name == "freq_log_magnitude_fft_aug_v1.pt"
+    v = c["experts"]["extract"]["cache_version"]
+    assert p_srm.name == f"freq_srm_aug_{v}.pt" and p_fft.name == f"freq_log_magnitude_fft_aug_{v}.pt"
     e = FreqExpert(c, "srm")
     load_head_into(c, e, "aug")
     assert e.input_mode == "srm"
