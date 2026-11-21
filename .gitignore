@@ -238,3 +238,11 @@ __marimo__/
 
 # Full texts of reference papers (licence: keep local, do not redistribute)
 /docs/raw_papers/*.md
+
+# Kept local only (not published): AI tooling, internal notes, experiment outputs, report
+/.claude/
+/CLAUDE.md
+/docs/PROJECT_BRIEF.md
+/docs/research/
+/docs/raw_papers/
+/reports/
