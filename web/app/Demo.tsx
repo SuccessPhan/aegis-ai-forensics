@@ -268,7 +268,7 @@ function Result({ r }: { r: PredictResponse }) {
           {isAI ? <path d="M12 3l2.2 5.6L20 11l-5.8 2.4L12 19l-2.2-5.6L4 11l5.8-2.4z" /> : <path d="M5 12.5l4.5 4.5L19 7.5" />}
         </svg>
         <span>{isAI ? "Nhiều khả năng là ảnh AI" : "Nhiều khả năng là ảnh thật"}</span>
-        <span className="tag">{r.label}</span>
+        <span className="tag" title="Độ tin cậy">{pct(r.confidence, 0)}</span>
       </div>
 
       <div className={`meter ${isAI ? "ai" : "real"}`}>
@@ -289,10 +289,6 @@ function Result({ r }: { r: PredictResponse }) {
           <span>100% AI</span>
         </div>
       </div>
-      <p className="conf">
-        Độ tin cậy: <strong>{pct(r.confidence, 1)}</strong>
-      </p>
-
       {r.warning_flag && (
         <div className="flag" role="alert">
           <strong>
@@ -310,6 +306,8 @@ function Result({ r }: { r: PredictResponse }) {
         </div>
       )}
 
+      <details className="more">
+      <summary>Xem chi tiết kỹ thuật</summary>
       <h3 className="h3">Ý kiến của ba chuyên gia</h3>
       <ul className="experts">
         {EXPERTS.map(({ key, name }) => {
@@ -350,6 +348,7 @@ function Result({ r }: { r: PredictResponse }) {
       <p className="meta">
         Mô hình {r.model_version} · {r.latency_ms} ms
       </p>
+      </details>
     </div>
   );
 }
