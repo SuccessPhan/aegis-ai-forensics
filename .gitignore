@@ -235,3 +235,6 @@ __marimo__/
 
 # Office lock files
 ~$*
+
+# Full texts of reference papers (licence: keep local, do not redistribute)
+/docs/raw_papers/*.md
