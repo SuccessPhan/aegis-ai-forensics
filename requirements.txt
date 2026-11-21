@@ -15,3 +15,8 @@ torchvision
 transformers
 safetensors
 matplotlib
+# Serving (web demo)
+fastapi
+uvicorn[standard]
+python-multipart
+httpx

@@ -232,3 +232,6 @@ __marimo__/
 
 # Report build tooling (npm)
 /reports/report_build/node_modules/
+
+# Office lock files
+~$*
