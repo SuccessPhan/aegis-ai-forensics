@@ -15,13 +15,15 @@
 - a **few-shot adaptation** step adapts to a new generator only when enough labelled samples exist;
 - every update must beat the current model on a held-out split (**Champion–Challenger**) or is rolled back.
 
-The full write-up, including every experiment round, what failed and how it was fixed, is in **[`reports/AEGIS_BaoCao_DoAn.docx`](reports/AEGIS_BaoCao_DoAn.docx)** (Vietnamese, 18 pages, 9 figures).
+A full project report (Vietnamese) documenting every experiment round, what failed and how it was fixed, is maintained separately from this repository.
 
 ---
 
 ## Table of Contents
 
 - [Key Results](#key-results)
+- [What We Achieved](#what-we-achieved)
+- [Results in Detail](#results-in-detail)
 - [How It Works](#how-it-works)
 - [Data and Shortcut Control](#data-and-shortcut-control)
 - [Experiment History](#experiment-history)
@@ -29,7 +31,6 @@ The full write-up, including every experiment round, what failed and how it was 
 - [Getting Started](#getting-started)
 - [Web Demo](#web-demo)
 - [Limitations](#limitations)
-- [Documentation](#documentation)
 - [References](#references)
 - [License](#license)
 
@@ -58,6 +59,83 @@ What the results support:
 What they do not support: AEGIS does **not** beat a static learned weighting on clean or JPEG images, and a single CLIP expert is very strong on Midjourney.
 
 ---
+
+## What We Achieved
+
+- **A complete, reproducible system**, from raw data to web demo: data audit → three experts → gating → few-shot adaptation → evaluation → FastAPI server → web frontend. Re-running the evaluation reproduces the results **byte for byte**; 128 automated tests.
+- **Found and measured a dataset shortcut** in GenImage (file format and size leak the label, 0.706 AUROC from image-quality features alone), reduced it to 0.63, and report the remainder as a `quality_only` floor instead of hiding it.
+- **Statistically significant, replicated gains** in two places: blur/resize (+0.013 AUROC over the strongest static ensemble) and few-shot adaptation to an unseen generator (+0.014 over a baseline given the same labelled samples).
+- **Showed that the gating behaves as designed**: weights move away from the expert that is failing under each degradation, and the system ends within ~0.01 AUROC of an oracle that knows the degradation in advance.
+- **Diagnosed and fixed a silent bug** (stale BatchNorm statistics made the frequency expert score 0.51 on its own training data) and **rejected two of our own hypotheses** with data.
+- **Reported honestly where it does not help**: no gain on clean or JPEG images, and weak results on raw images from new generators.
+
+## Results in Detail
+
+All numbers below are from the main experiment (v3): test split run once, 1,600 images per scenario level, AUROC unless stated.
+
+### Each expert fails under a different degradation
+
+![Expert robustness](docs/images/expert_robustness.png)
+
+The frequency expert collapses under JPEG (0.981 → 0.577 at Q40) and blur (0.494); CLIP collapses under blur (0.994 → 0.663); DINOv2 is the most blur-robust (0.777 at σ = 2.5). This complementarity is what makes routing worthwhile.
+
+### Main table
+
+![Main results](docs/images/main_results.png)
+
+| Scenario | CLIP | DINOv2 | Freq | Static LR | **AEGIS** | Shortcut floor |
+|---|---|---|---|---|---|---|
+| **Heads trained on clean images** | | | | | | |
+| S1 clean | 0.994 | 0.891 | 0.981 | 0.993 | 0.991 | 0.625 |
+| S2 JPEG | 0.839 | 0.774 | 0.600 | 0.871 | 0.862 | 0.577 |
+| S3 blur / resize | 0.682 | 0.805 | 0.522 | 0.808 | **0.821** | 0.512 |
+| S4 Midjourney, N = 20 | 0.960 | 0.805 | 0.828 | 0.949 † | **0.963** | 0.652 |
+| **Heads trained with augmentation** | | | | | | |
+| S1 clean | 0.987 | 0.874 | 0.970 | 0.996 | 0.996 | 0.625 |
+| S2 JPEG | 0.899 | 0.782 | 0.800 | 0.932 | 0.929 | 0.577 |
+| S3 blur / resize | 0.823 | 0.813 | 0.530 | 0.869 | 0.869 | 0.512 |
+| S4 Midjourney, N = 20 | 0.928 | 0.783 | 0.781 | 0.920 † | **0.935** | 0.652 |
+
+† In S4, Static LR is refit on the same few-shot support set that AEGIS uses (equal labelled-data budget).
+
+### Statistical significance
+
+![Significance](docs/images/significance.png)
+
+Paired bootstrap, B = 2000, resampled by source image. Intervals that do not cross 0 are significant.
+
+### Few-shot adaptation on an unseen generator (Midjourney)
+
+![Few-shot](docs/images/fewshot.png)
+
+| Head | No adaptation | N = 5 (keep) | N = 20 (anchored blend) | N = 100 (refit) | CLIP alone |
+|---|---|---|---|---|---|
+| clean | 0.956 | 0.956 vs 0.949 | **0.963** vs 0.949 | 0.957 vs 0.948 | 0.960 |
+| aug | 0.922 | 0.922 vs 0.920 | **0.935** vs 0.920 | 0.932 vs 0.922 | 0.928 |
+
+Each cell is AEGIS vs Static LR refit on the same support set, averaged over 5 seeds. With N = 5 AEGIS deliberately does not change; from N = 20 the adaptation mechanism, not just the extra labels, gives the gain.
+
+### The gating network routes in the right direction
+
+![Weights under blur](docs/images/weights_by_blur.png)
+
+Under blur (clean heads), the weight moves from CLIP to DINOv2 (DINOv2 weight 0.15 → 0.67 at σ = 1.5), matching which expert is still reliable. Under JPEG (augmented heads), the frequency expert's weight drops step by step (0.39 → 0.28 → 0.20 from clean to Q40).
+
+### How much room is left for routing?
+
+![Oracle ceiling](docs/images/oracle_ceiling.png)
+
+An oracle that knows the degradation level and uses the best fixed weights for it (tuned on the test slice itself, an optimistic upper bound used only for diagnosis) beats AEGIS by at most ~0.01 AUROC at every level. The remaining limit is expert quality, not routing.
+
+### The shortcut audit
+
+![Shortcut audit](docs/images/audit.png)
+
+A logistic regression that sees only three image-quality features should score 0.50 if the data carried no shortcut. Normalisation brought it from 0.706 to about 0.63; GLIDE (0.979) was dropped as an unseen generator because image quality alone separates it.
+
+### Yellow flag
+
+The flag rate rises with degradation (7.4% on clean images, 25.6% under JPEG, 30.0% under blur/resize), and accuracy on unflagged images is higher than overall (e.g. blur/resize, clean heads: 0.728 → 0.780).
 
 ## How It Works
 
@@ -105,7 +183,7 @@ Only the expert heads, the 1.17 M-parameter frequency CNN and the gating MLP are
 | Fusion | Logit-space fusion tried | Chosen on validation only: no gain, keep probability fusion |
 | v3 | Main results above | Reported with limitations |
 
-Every round's data and results are kept (`reports/v1`, `reports/v2`, `reports/v3`) and each is tied to a git commit.
+Every round can be reproduced with the pipeline commands below; outputs are written to `reports/` (generated locally, not tracked in git).
 
 ---
 
@@ -113,12 +191,10 @@ Every round's data and results are kept (`reports/v1`, `reports/v2`, `reports/v3
 
 ```text
 aegis-ai-forensics/
-├── CLAUDE.md                # project rules, architecture, multi-agent workflow
 ├── configs/default.yaml     # every hyperparameter and path
 ├── docs/
-│   ├── PROJECT_BRIEF.md     # research brief + decision log (§5–§10)
 │   ├── WEB_API_CONTRACT.md  # contract between server and web frontend
-│   └── research/            # per-paper analyses and METHOD_SPECS.md
+│   └── images/              # result figures used in this README
 ├── src/
 │   ├── core/                # data contracts, config, logger
 │   ├── data/                # ingest, normalisation, quality features, splits, shortcut audit
@@ -129,9 +205,8 @@ aegis-ai-forensics/
 │   └── serving/             # FastAPI inference server for the web demo
 ├── web/                     # Next.js frontend (Vercel)
 ├── scripts/                 # data download, toy dataset, PDF→Markdown, server launcher
-├── reports/                 # experiment results, figures, the Word report
 ├── tests/                   # 128 pytest tests
-└── data/                    # images, caches, models (not in git)
+└── data/, reports/          # images, caches, models, experiment outputs (generated, not in git)
 ```
 
 ---
@@ -179,7 +254,6 @@ python -m src.evaluation.significance --pred reports/v3/predictions --out report
 python -m src.evaluation.weights_analysis --pred reports/v3/predictions --out reports/v3 --manifest $M
 ```
 
-The report figures are regenerated from these outputs with `python reports/report_build/make_figures.py` and `node reports/report_build/build_docx.js`.
 
 ---
 
@@ -210,13 +284,6 @@ API details: [`docs/WEB_API_CONTRACT.md`](docs/WEB_API_CONTRACT.md).
 - Scale: 4 generators, 2,000 images per class each.
 
 ---
-
-## Documentation
-
-- [`reports/AEGIS_BaoCao_DoAn.docx`](reports/AEGIS_BaoCao_DoAn.docx): full project report (Vietnamese).
-- [`docs/PROJECT_BRIEF.md`](docs/PROJECT_BRIEF.md): research brief and dated decision log.
-- [`docs/research/METHOD_SPECS.md`](docs/research/METHOD_SPECS.md): literature review mapped onto AEGIS.
-- [`CLAUDE.md`](CLAUDE.md): project rules and multi-agent development workflow.
 
 ## References
 
