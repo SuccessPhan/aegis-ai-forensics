@@ -171,3 +171,30 @@ Nguồn: `reports/v1` (ablation), `reports/v2` (bootstrap CI theo cụm ảnh g�
 1. **Thay GLIDE bằng VQDM** làm generator unseen thứ hai (cùng nguồn `genimage_test.zip`, 2.000 AI + 2.000 Real). Lý do: GLIDE tách được 0.979 AUROC chỉ bằng 3 đặc trưng chất lượng ⇒ không phải bài kiểm tra OOD có ý nghĩa. Unseen = Midjourney + VQDM. VQDM cũng phải được audit; nếu cũng tách quá dễ thì báo cáo trung thực.
 2. **Thử trộn theo logit** (`gating.fusion: logit`, $P = \sigma(\sum w_i \ell_i)$) như một họ trộn khác ngoài trung bình xác suất. Lựa chọn prob/logit được quyết định **chỉ trên `val_gating_verify`** (Δ AUROC > 0 với CI 95% không chứa 0 và ECE không xấu đi quá `max_ece_increase`).
 3. Vì đổi dữ liệu, toàn bộ pipeline chạy lại (ingest → embedding → head → bundle → chọn fusion → ablation v3). Split mới khác split v1/v2. **Báo cáo phải ghi rõ** các quyết định thiết kế ở §6–§9 đã được đưa ra sau khi xem kết quả test v1/v2.
+
+## 10. Kết quả chính v3 (dữ liệu có VQDM, split mới) — 2026-11-21
+
+Nguồn: `reports/v3` (ablation chạy **một lần** trên `test_benchmark` của split v2; bootstrap theo cụm ảnh gốc, B=2000). Lựa chọn trước test (chỉ dùng val): Freq = SRM (val AUROC 0.977/0.968 vs FFT 0.912/0.877); fusion = `prob` (logit không cải thiện AEGIS trên `val_gating_verify`: Δ −0.0001 / −0.0012, CI chứa 0). Audit VQDM: 0.727 (tương đương Midjourney 0.693, không dễ như GLIDE 0.979).
+
+**ΔAUROC (AEGIS − baseline), `*` = CI 95% không chứa 0:**
+
+| Ô | Head | vs Static LR | vs Naive avg | vs CLIP | vs Static LR + support |
+|---|---|---|---|---|---|
+| S1 | clean | −0.002* | −0.005* | −0.004* | – |
+| S1 | aug | +0.000 | +0.001 | +0.009* | – |
+| S2 (JPEG) | clean | **−0.009*** | **−0.013*** | +0.023* | – |
+| S2 (JPEG) | aug | −0.003 | +0.001 | +0.030* | – |
+| S3 (blur/resize) | clean | **+0.013*** | **+0.015*** | +0.139* | – |
+| S3 (blur/resize) | aug | −0.001 | −0.003 | +0.045* | – |
+| S4 Midjourney N=20 | clean | +0.014* | +0.008* | +0.002* | **+0.014*** |
+| S4 Midjourney N=20 | aug | +0.015* | +0.018* | +0.007* | **+0.014*** |
+| S4 Midjourney N=100 | clean | +0.008* | +0.002 | −0.004* | **+0.009*** |
+| S4 Midjourney N=100 | aug | +0.013* | +0.015* | +0.004 | **+0.010*** |
+| S4 VQDM (mọi N) | cả hai | ≈0 (|Δ| ≤ 0.001) | ≈0 | ≈0 | ≈0 |
+
+**Kết luận v3:**
+1. **Lặp lại được (v1 → v3):** lợi thế ở S3 với head clean (+0.023 → +0.013) và lợi thế few-shot trên Midjourney ở N=20 so với baseline cùng ngân sách nhãn (+0.013/+0.016 → +0.014/+0.014). Cơ chế neo (N=20) cải thiện có ý nghĩa so với không thích nghi (+0.006 clean, +0.012 aug).
+2. **Mới / bất lợi:** ở S2 với head clean, AEGIS **thua có ý nghĩa** Static LR (−0.009) và Naive avg (−0.013); ở v1 là hòa. Với head aug, AEGIS hòa Static LR ở S1–S3.
+3. **VQDM bão hòa:** mọi phương pháp ≈ 0.998 AUROC (CLIP một mình 0.998) dù đặc trưng chất lượng không tách được (0.596) ⇒ VQDM dễ với các expert ngữ nghĩa, không phân biệt được các phương pháp. Bằng chứng S4 vẫn dựa vào Midjourney.
+4. **Trọng số** lặp lại xu hướng v1/v2: head clean dưới blur chuyển sang DINOv2 (w 0.15 → 0.67); head aug dưới JPEG giảm w_freq (0.39 → 0.28 → 0.20); dưới blur w_freq về sàn (~0.07).
+5. Lưu ý toàn vẹn: các quyết định §6–§9 được đưa ra sau khi xem kết quả test v1/v2 (split cũ). v3 là split mới, nhưng phải ghi rõ trong báo cáo.
