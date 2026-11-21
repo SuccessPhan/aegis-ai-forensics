@@ -7,7 +7,7 @@ paths:
   raw_root: "data/raw/genimage"
   data_root: "data"
   normalized_dir: "data/normalized"
-  manifest: "data/normalized_v1/manifest.json"
+  manifest: "data/normalized_v2/manifest.json"
   cache_dir: "data/cache"
   toy_dir: "data/toy"
   pdf_dir: "docs/pdfs"
@@ -100,7 +100,7 @@ experts:
   extract:
     batch_size: 32
     dtype: "float16"
-    cache_version: "v1"                           # part of the cache key (sha256 + expert + version)
+    cache_version: "v2"                           # part of the cache key (sha256 + expert + version)
     save_every: 20                                # ASSUMPTION: flush cache every N batches (code default in extract_records)
 
 ood:
