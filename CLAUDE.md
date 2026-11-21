@@ -55,6 +55,8 @@ The user assigns tasks to the main session. The main session acts as **orchestra
 | `data-architect` | `configs/`, `src/core/`, `src/data/` (incl. `quality.py`), `scripts/pdf_to_md.py`, `scripts/create_toy_dataset.py` |
 | `expert-detector-eng` | `src/models/`, `src/ood/`, `data/cache/` |
 | `gating-eval-eng` | `src/learning/`, `src/evaluation/` |
+| `expert-detector-eng` (web demo) | `src/serving/` — FastAPI inference server, see `docs/WEB_API_CONTRACT.md` |
+| frontend (general-purpose agent) | `web/` — Next.js frontend deployed on Vercel |
 | `quick-edit` (Haiku) | Small, precisely specified edits only — no algorithm code, no contract changes |
 
 - **Delegate large, self-contained work packages**, each with: task, inputs, constraints, and a checkable **"Done when"** criterion (usually `pytest tests/test_<area>_*` passing in < 15 s).
