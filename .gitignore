@@ -229,3 +229,6 @@ __marimo__/
 
 # Per-sample predictions are large (~128 MB per run); regenerate with --save-predictions
 /reports/*/predictions/
+
+# Report build tooling (npm)
+/reports/report_build/node_modules/
