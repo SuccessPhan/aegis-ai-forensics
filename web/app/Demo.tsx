@@ -70,6 +70,12 @@ export default function Demo({ children }: { children?: React.ReactNode }) {
     };
   }, [preview]);
   useEffect(() => () => abortRef.current?.abort(), []);
+  // On phones the result card sits below the preview: bring it into view once it arrives.
+  useEffect(() => {
+    if (!result || window.innerWidth >= 900) return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    document.querySelector(".result")?.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+  }, [result]);
 
   const reset = useCallback(() => {
     abortRef.current?.abort();
