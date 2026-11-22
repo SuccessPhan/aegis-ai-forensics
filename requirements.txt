@@ -20,3 +20,7 @@ fastapi
 uvicorn[standard]
 python-multipart
 httpx
+# Notebooks + classic ML comparison
+pandas
+jupyter
+xgboost          # optional: the `xgboost` model is skipped when it is not installed

@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.14](https://img.shields.io/badge/Python-3.14-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch 2.11](https://img.shields.io/badge/PyTorch-2.11%20(CUDA%2012.8)-ee4c2c.svg)](https://pytorch.org/)
-[![Tests: 128 passing](https://img.shields.io/badge/tests-128%20passing-success.svg)](#running-the-tests)
+[![Tests: 152 passing](https://img.shields.io/badge/tests-152%20passing-success.svg)](#running-the-tests)
 [![Status: Research prototype](https://img.shields.io/badge/Status-Research%20prototype-orange.svg)](#limitations)
 
 > *"An intelligent detection system should not only recognize what it knows, but also understand what it does not know, decide when it needs to adapt, and verify whether its adaptation actually improves reliability."*
@@ -200,12 +200,13 @@ aegis-ai-forensics/
 │   ├── data/                # ingest, normalisation, quality features, splits, shortcut audit
 │   ├── models/              # experts, feature cache, heads, bundles
 │   ├── ood/                 # entropy and cosine-distance profiler
-│   ├── learning/            # calibration, gating, few-shot, flags, export
-│   ├── evaluation/          # metrics, ablation, significance, weight analysis
+│   ├── learning/            # calibration, gating, few-shot, flags, export, classic ML model zoo
+│   ├── evaluation/          # metrics, ablation, significance, weight analysis, ML model comparison
 │   └── serving/             # FastAPI inference server for the web demo
+├── notebooks/               # Jupyter: data prep, experts/bundles, AEGIS evaluation, classic-ML comparison
 ├── web/                     # Next.js frontend (Vercel)
 ├── scripts/                 # data download, toy dataset, PDF→Markdown, server launcher
-├── tests/                   # 128 pytest tests
+├── tests/                   # 152 pytest tests
 └── data/, reports/          # images, caches, models, experiment outputs (generated, not in git)
 ```
 
@@ -227,7 +228,7 @@ Developed on Windows 11, Python 3.14, PyTorch 2.11 + CUDA 12.8, RTX 4060 Laptop 
 ### 2. Running the tests
 
 ```bash
-python -m pytest tests/ -q        # 128 tests on a synthetic toy dataset, no downloads
+python -m pytest tests/ -q        # 152 tests on a synthetic toy dataset, no downloads
 ```
 
 ### 3. Data
@@ -252,7 +253,35 @@ python -m src.evaluation.select_fusion                             # validation 
 python -m src.evaluation.ablation --s4-seeds 0 1 2 3 4 --out reports/v3 --save-predictions
 python -m src.evaluation.significance --pred reports/v3/predictions --out reports/v3 --manifest $M
 python -m src.evaluation.weights_analysis --pred reports/v3/predictions --out reports/v3 --manifest $M
+python -m src.evaluation.ml_comparison --manifest $M --out reports/ml_comparison   # classic ML models, see below
 ```
+
+### 5. Notebooks
+
+The same pipeline is available as Jupyter notebooks in [`notebooks/`](notebooks/) (start Jupyter from the repo root
+or from `notebooks/`):
+
+| Notebook | Replaces | Runs without real data? |
+|---|---|---|
+| `01_data_preparation` | `fetch_genimage.py`, `src.data.ingest`, shortcut audit + dataset statistics | yes (demo) |
+| `02_experts_and_bundles` | `src.models.extract`, `src.models.heads`, `src.models.bundle` | no (needs GPU + data) |
+| `03_aegis_evaluation` | `select_fusion`, `ablation`, `significance`, `weights_analysis`, `export` | yes (demo) |
+| `04_ml_model_comparison` | `src.evaluation.ml_comparison` + plots, fusion-level and unsupervised analysis | yes (demo) |
+
+If `data/normalized_v2/manifest.json` is missing, notebooks 01/03/04 switch to **demo mode**
+(`src/models/demo_features.py`): synthetic images, image-derived pseudo-embeddings and bundles in the real formats,
+about one minute on a CPU. Demo numbers carry no scientific meaning; they only show that the code runs.
+
+### 6. Classic machine-learning comparison
+
+`src.evaluation.ml_comparison` asks whether the linear head on each frozen backbone is the right choice. Eleven models
+(`src/learning/classic_models.py`: logistic regression, linear SVM, LDA, Gaussian NB, kNN, RBF-SVM, decision tree,
+random forest, histogram gradient boosting, XGBoost if installed, MLP) are compared with the AEGIS `linear_head` on
+CLIP, DINOv2 and CLIP+DINOv2 features, on the same splits and S1-S4 slices as the ablation. Protocol: train on
+`train_experts`, choose hyperparameters by AUROC on `val_gating_fit`, Platt-calibrate on the same split, evaluate
+`test_benchmark` / `s4_eval` once, paired cluster bootstrap against `linear_head`. `run_fusion_comparison` uses the same
+zoo as meta-classifiers on the 12-d gating input against Static LR and AEGIS. Outputs: `results.csv`,
+`significance.csv`, `tuning.csv`, `timing.csv`, `summary.md`.
 
 
 ---
