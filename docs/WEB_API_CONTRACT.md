@@ -58,3 +58,38 @@ EXIF-orientation fix → RGB (first frame if animated) → `resize_crop` exactly
 
 ## CORS
 Allowed origins from env `AEGIS_ALLOWED_ORIGINS` (comma-separated; e.g. the Vercel URL and `http://localhost:3000`).
+
+## Lab mode (added 2026-11-23, for the 7-minute defense demo)
+
+Purpose: take ONE held-out test image and show how AEGIS's per-expert weights, probability and yellow flag change as the
+image is degraded. Everything happens server-side on the team laptop: images come from the held-out `test_benchmark`
+split (clean images only) of the normalized dataset (`paths.manifest` in the config); **nothing is uploaded and nothing
+is stored**. Degradations are applied to the 224×224 normalized image exactly as in the evaluation (same code as
+`src/data/degradations`), and the result is fed to the experts **without any further resizing**.
+
+### `GET /api/lab/samples`
+200:
+```json
+{ "samples": [ { "id": "s1", "truth": "Real", "source": "real", "thumb": "data:image/jpeg;base64,..." } ] }
+```
+8 samples: 4 Real + 4 AI (2 `adm` + 2 `sd_v1_4`), drawn from clean `test_benchmark` images with a fixed seed
+(config `lab.seed`, default 7), so the list is identical on every call. `truth` is `"Real"` or `"AI"`.
+
+### `POST /api/lab/run`
+Request: JSON `{ "sample_id": "s1" }`.
+200:
+```json
+{
+  "sample_id": "s1", "truth": "AI", "source": "adm", "model_version": "aegis-v3-aug-srm", "latency_ms": 310,
+  "variants": [
+    { "key": "clean", "title": "Ảnh gốc", "thumb": "data:image/jpeg;base64,...",
+      "label": "AI", "p_ai": 0.93, "confidence": 0.93, "warning_flag": false, "flag_reasons": [],
+      "experts": { "clip": {"p_ai": 0.9, "weight": 0.55}, "dinov2": {"p_ai": 0.8, "weight": 0.25}, "freq": {"p_ai": 0.95, "weight": 0.20} },
+      "quality": { "jpeg_quality_est": 96.1, "log_laplacian_var": 7.2, "high_freq_energy_ratio": 0.031 } }
+  ]
+}
+```
+Variants, always in this order: `clean` ("Ảnh gốc"), `blur_s1.5` ("Mờ nhẹ", Gaussian k=11 σ=1.5), `blur_s2.5`
+("Mờ nặng", k=17 σ=2.5), `jpeg_q40` ("Nén JPEG mạnh", quality 40). `thumb` is the degraded 224×224 image as a small data URL.
+Errors (same JSON shape as `/api/predict`): 404 `unknown_sample`; 503 `lab_unavailable` (manifest or images missing,
+Vietnamese message); 429 / 503 `not_ready` share the rate limit and GPU queue with `/api/predict`.

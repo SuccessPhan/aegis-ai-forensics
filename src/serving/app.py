@@ -25,8 +25,10 @@ from fastapi.responses import JSONResponse
 from python_multipart.multipart import MultipartParser, parse_options_header
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from src.core.config import load_config
 from src.core.logger import get_logger
 from src.serving.engine import DEFAULT_MODEL_VERSION, Engine, ImageError
+from src.serving.lab import Lab, LabUnavailable, UnknownSample
 
 log = get_logger(__name__)
 
@@ -43,9 +45,11 @@ MESSAGES = {
     "rate_limited": "Bạn gửi quá nhiều yêu cầu. Vui lòng thử lại sau ít phút.",
     "not_ready": "Hệ thống đang khởi động hoặc quá tải. Vui lòng thử lại sau giây lát.",
     "internal": "Đã xảy ra lỗi khi phân tích ảnh. Vui lòng thử lại.",
+    "unknown_sample": "Không tìm thấy mẫu ảnh này trong danh sách Lab.",
+    "lab_unavailable": "Chế độ Lab chưa sẵn sàng: thiếu manifest hoặc ảnh của tập kiểm thử trên máy chủ.",
 }
 STATUS = {"bad_image": 400, "too_small": 400, "too_large": 413, "rate_limited": 429, "not_ready": 503,
-          "internal": 500}
+          "internal": 500, "unknown_sample": 404, "lab_unavailable": 503}
 
 
 class _TooLarge(Exception):
@@ -122,6 +126,7 @@ def create_app(engine: Optional[Engine] = None, engine_factory: Optional[Callabl
     st.counter = itertools.count(1)                  # anonymous request counter
     st.hits = defaultdict(deque)                     # ip -> timestamps (in-memory only)
     st.gpu_lock = asyncio.Lock()
+    st.lab = None                                    # Lab (lazy, cached in memory)
 
     origins = [o.strip() for o in os.environ.get("AEGIS_ALLOWED_ORIGINS", "").split(",") if o.strip()]
     if origins:
@@ -217,6 +222,71 @@ def create_app(engine: Optional[Engine] = None, engine_factory: Optional[Callabl
             return err(e.code)
         except Exception as e:  # noqa: BLE001
             log.error("analysis failed: %s", type(e).__name__)
+            return err("internal")
+        finally:
+            st.pending -= 1
+
+    # ------------------------------------------------------------------ lab mode
+    def _get_lab() -> Lab:
+        if st.lab is None:
+            cfg = st.engine.cfg if st.engine is not None else load_config()
+            st.lab = Lab(cfg)
+        return st.lab
+
+    @app.get("/api/lab/samples")
+    async def lab_samples(request: Request) -> JSONResponse:
+        t0 = time.perf_counter()
+        n = next(st.counter)
+        resp = await _lab_samples(request)
+        log.info("lab samples #%d status=%d latency_ms=%d", n, resp.status_code, int((time.perf_counter() - t0) * 1000))
+        return resp
+
+    async def _lab_samples(request: Request) -> JSONResponse:
+        if _rate_limited(_client_ip(request)):
+            return err("rate_limited")
+        try:
+            samples = await asyncio.get_running_loop().run_in_executor(None, _get_lab().samples)
+            return JSONResponse({"samples": samples})
+        except LabUnavailable:
+            return err("lab_unavailable")
+        except Exception as e:  # noqa: BLE001
+            log.error("lab samples failed: %s", type(e).__name__)
+            return err("internal")
+
+    @app.post("/api/lab/run")
+    async def lab_run(request: Request) -> JSONResponse:
+        t0 = time.perf_counter()
+        n = next(st.counter)
+        resp = await _lab_run(request, t0)
+        log.info("lab run #%d status=%d latency_ms=%d", n, resp.status_code, int((time.perf_counter() - t0) * 1000))
+        return resp
+
+    async def _lab_run(request: Request, t0: float) -> JSONResponse:
+        if _rate_limited(_client_ip(request)):
+            return err("rate_limited")
+        eng: Optional[Engine] = st.engine
+        if eng is None or st.pending >= max_waiting + 1:
+            return err("not_ready")
+        try:
+            body = await request.json()
+            sid = body.get("sample_id") if isinstance(body, dict) else None
+        except Exception:  # noqa: BLE001
+            sid = None
+        if not isinstance(sid, str):
+            return err("unknown_sample")
+        st.pending += 1
+        try:
+            lab = _get_lab()
+            async with st.gpu_lock:
+                result = await asyncio.get_running_loop().run_in_executor(None, lab.run, eng, sid)
+            result["latency_ms"] = int(round((time.perf_counter() - t0) * 1000))
+            return JSONResponse(result)
+        except UnknownSample:
+            return err("unknown_sample")
+        except LabUnavailable:
+            return err("lab_unavailable")
+        except Exception as e:  # noqa: BLE001
+            log.error("lab run failed: %s", type(e).__name__)
             return err("internal")
         finally:
             st.pending -= 1

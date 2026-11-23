@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import ServerStatus, { useServerState } from "./ServerStatus";
 import { API_URL, ApiError, FlagReason, PredictResponse, predict, validateFile } from "./api";
 
@@ -133,7 +134,10 @@ export default function Demo({ children }: { children?: React.ReactNode }) {
             <span className="brand-name">AEGIS</span>
             <span className="badge">Bản demo nghiên cứu</span>
           </div>
-          {API_URL && <ServerStatus state={server} />}
+          <div className="top-r">
+            <Link className="lablink" href="/lab">Chế độ phòng thí nghiệm</Link>
+            {API_URL && <ServerStatus state={server} />}
+          </div>
         </div>
       </header>
 

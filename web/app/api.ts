@@ -81,3 +81,75 @@ export async function predict(file: File, signal?: AbortSignal): Promise<Predict
     throw new ApiError("Máy chủ trả về dữ liệu không hợp lệ.");
   }
 }
+
+/* ---------- Chế độ phòng thí nghiệm (Lab) ---------- */
+
+export interface LabSample {
+  id: string;
+  truth: "Real" | "AI";
+  source: string;
+  thumb: string;
+}
+
+export interface LabVariant {
+  key: string;
+  title: string;
+  thumb: string;
+  label: "AI" | "Real";
+  p_ai: number;
+  confidence: number;
+  warning_flag: boolean;
+  flag_reasons: FlagReason[];
+  experts: { clip: Expert; dinov2: Expert; freq: Expert };
+  quality: PredictResponse["quality"];
+}
+
+export interface LabRunResponse {
+  sample_id: string;
+  truth: "Real" | "AI";
+  source: string;
+  model_version: string;
+  latency_ms: number;
+  variants: LabVariant[];
+}
+
+async function labRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, { ...init, cache: "no-store" });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") throw e;
+    throw new ApiError("Máy chủ demo đang tạm nghỉ. Vui lòng thử lại sau.");
+  }
+  if (!res.ok) {
+    let msg = "";
+    try {
+      const j = await res.json();
+      if (j && typeof j.message === "string") msg = j.message;
+    } catch {
+      /* bỏ qua */
+    }
+    const fallback =
+      res.status === 404 ? "Không tìm thấy ảnh mẫu này. Hãy tải lại trang." : STATUS_FALLBACK[res.status];
+    throw new ApiError(msg || fallback || "Đã có lỗi xảy ra. Vui lòng thử lại.");
+  }
+  try {
+    return (await res.json()) as T;
+  } catch {
+    throw new ApiError("Máy chủ trả về dữ liệu không hợp lệ.");
+  }
+}
+
+export async function labSamples(signal?: AbortSignal): Promise<LabSample[]> {
+  const j = await labRequest<{ samples: LabSample[] }>("/api/lab/samples", { signal });
+  return j.samples ?? [];
+}
+
+export function labRun(sampleId: string, signal?: AbortSignal): Promise<LabRunResponse> {
+  return labRequest<LabRunResponse>("/api/lab/run", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sample_id: sampleId }),
+    signal,
+  });
+}
