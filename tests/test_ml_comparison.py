@@ -6,7 +6,7 @@ from sklearn.datasets import make_classification
 
 from src.evaluation.ml_comparison import (RESULT_COLUMNS, compare_on_embeddings, iter_slices, load_all,
                                           run_comparison, run_fusion_comparison, summary_table, write_outputs)
-from src.learning.classic_models import (DEFAULT_MODELS, MODEL_SPECS, REFERENCE, LinearHeadClassifier, PlattScaler,
+from src.learning.classic_models import (ALL_MODELS, COMPARISON_MODELS, DEFAULT_MODELS, MODEL_SPECS, REFERENCE, LinearHeadClassifier, PlattScaler,
                                          SklearnStacker, build_model, raw_score, tune)
 from src.learning.features import FeatureSet
 
@@ -27,7 +27,7 @@ def demo(cfg):
     return build_demo(ROOT / "data" / ROOT_DEMO, scale=2, cfg=cfg)
 
 
-@pytest.mark.parametrize("name", list(DEFAULT_MODELS))
+@pytest.mark.parametrize("name", list(ALL_MODELS))
 def test_every_model_fits_and_beats_chance(name, xy, cfg):
     Xtr, ytr, Xva, yva, Xte, yte = xy
     tm = tune(name, Xtr, ytr, Xva, yva, seed=0, cfg=cfg)
@@ -36,6 +36,12 @@ def test_every_model_fits_and_beats_chance(name, xy, cfg):
     from sklearn.metrics import roc_auc_score
     assert roc_auc_score(yte, p) > 0.6, name
     assert len(tm.trials) == max(1, int(np.prod([len(v) for v in MODEL_SPECS[name].grid.values()] or [1])))
+
+
+def test_default_comparison_is_reference_plus_two_models():
+    assert DEFAULT_MODELS == (REFERENCE,) + COMPARISON_MODELS
+    assert COMPARISON_MODELS == ("rbf_svm", "random_forest")
+    assert set(DEFAULT_MODELS) <= set(ALL_MODELS)
 
 
 def test_tune_keeps_best_validation_auroc(xy, cfg):

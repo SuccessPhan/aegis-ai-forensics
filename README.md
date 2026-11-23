@@ -274,9 +274,11 @@ about one minute on a CPU. Demo numbers carry no scientific meaning; they only s
 
 ### 6. Classic machine-learning comparison
 
-`src.evaluation.ml_comparison` asks whether the linear head on each frozen backbone is the right choice. Eleven models
-(`src/learning/classic_models.py`: logistic regression, linear SVM, LDA, Gaussian NB, kNN, RBF-SVM, decision tree,
-random forest, histogram gradient boosting, XGBoost if installed, MLP) are compared with the AEGIS `linear_head` on
+`src.evaluation.ml_comparison` asks whether the linear head on each frozen backbone is the right choice. Two models,
+an **RBF-kernel SVM** and a **random forest** (`COMPARISON_MODELS` in `src/learning/classic_models.py`), are compared
+with the AEGIS `linear_head`; the module also contains logistic regression, linear SVM, LDA, Gaussian NB, kNN, decision
+tree, histogram gradient boosting, XGBoost and MLP, which run with `--models ...` or by adding them to
+`COMPARISON_MODELS`. The comparison runs on
 CLIP, DINOv2 and CLIP+DINOv2 features, on the same splits and S1-S4 slices as the ablation. Protocol: train on
 `train_experts`, choose hyperparameters by AUROC on `val_gating_fit`, Platt-calibrate on the same split, evaluate
 `test_benchmark` / `s4_eval` once, paired cluster bootstrap against `linear_head`. `run_fusion_comparison` uses the same

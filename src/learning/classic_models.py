@@ -1,5 +1,8 @@
 """Classic machine-learning model zoo used to compare against the AEGIS linear heads and the gating network.
 
+By default two models are compared with the reference `linear_head` (COMPARISON_MODELS: RBF-SVM and random forest);
+the other zoo models stay available through ALL_MODELS / the `models` argument.
+
 The same zoo works at two levels of the system:
   * embedding level  - replaces the `LinearHead` on frozen CLIP / DINOv2 features (src.evaluation.ml_comparison);
   * fusion level     - replaces Static LR / the gating MLP on the 12-d gating input (`SklearnStacker`).
@@ -175,12 +178,17 @@ MODEL_SPECS: Dict[str, ModelSpec] = {s.name: s for s in [
     ModelSpec("mlp", "neural", _mlp, {"alpha": [1e-4, 1e-2]}, "MLP, 1 hidden layer (256), early stopping"),
 ]}
 
-DEFAULT_MODELS: Tuple[str, ...] = tuple(m for m in MODEL_SPECS if m != "xgboost" or _has("xgboost"))
 REFERENCE = "linear_head"
+# Every model in the zoo that can run here (xgboost only when installed).
+ALL_MODELS: Tuple[str, ...] = tuple(m for m in MODEL_SPECS if m != "xgboost" or _has("xgboost"))
+# Models compared by default against the reference: one kernel method and one tree ensemble. To compare more, add
+# names from ALL_MODELS here (or pass models=... / --models ...); nothing else needs to change.
+COMPARISON_MODELS: Tuple[str, ...] = ("rbf_svm", "random_forest")
+DEFAULT_MODELS: Tuple[str, ...] = (REFERENCE,) + COMPARISON_MODELS
 
 
 def available_models() -> List[str]:
-    return list(DEFAULT_MODELS)
+    return list(ALL_MODELS)
 
 
 def build_model(name: str, n_samples: int, n_features: int, seed: int = 0, cfg: Optional[dict] = None, **params):
