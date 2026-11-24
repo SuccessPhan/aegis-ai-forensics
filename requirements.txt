@@ -23,4 +23,4 @@ httpx
 # Notebooks + classic ML comparison
 pandas
 jupyter
-xgboost          # optional: the `xgboost` model is skipped when it is not installed
+xgboost          # one of the three machine-learning models of the comparison

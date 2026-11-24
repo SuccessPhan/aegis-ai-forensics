@@ -1,21 +1,21 @@
-"""Classic machine-learning model zoo used to compare against the AEGIS linear heads and the gating network.
+"""The three classic machine-learning models compared with the image models of AEGIS.
 
-By default two models are compared with the reference `linear_head` (COMPARISON_MODELS: RBF-SVM and random forest);
-the other zoo models stay available through ALL_MODELS / the `models` argument.
+  rbf_svm        support vector machine with a Gaussian (RBF) kernel      - kernel method
+  random_forest  300 decision trees on bootstrap samples, majority vote  - bagging ensemble of trees
+  xgboost        gradient-boosted decision trees (XGBoost)                - boosting ensemble of trees
 
-The same zoo works at two levels of the system:
-  * embedding level  - replaces the `LinearHead` on frozen CLIP / DINOv2 features (src.evaluation.ml_comparison);
-  * fusion level     - replaces Static LR / the gating MLP on the 12-d gating input (`SklearnStacker`).
+They are trained on three kinds of input (src.evaluation.ml_comparison):
+  * hand-crafted features computed from the pixels (src.data.handcrafted): classic machine learning end to end,
+    no deep network involved -- the direct answer to "can machine learning do as well as the deep image models?";
+  * the frozen CLIP / DINOv2 embeddings: same features as the AEGIS experts, different classifier;
+  * the 12-d gating input (`SklearnStacker`): a machine-learning model in place of the gating network.
 
 Protocol (identical for every model, so the comparison is fair):
   1. hyperparameters are chosen on a VALIDATION split by AUROC (small grid, `ModelSpec.grid`); the test split is never
      touched while tuning;
-  2. every model returns a raw score (logit of predict_proba, or decision_function), and a 1-D Platt scaler fitted on
+  2. every model returns a raw score (decision_function, or logit of predict_proba), and a 1-D Platt scaler fitted on
      the same validation split turns it into P(fake). Accuracy@0.5 / ECE are therefore comparable across models, in
      the same way the repo calibrates the expert heads with a temperature fitted on val_gating_fit.
-
-`linear_head` is the repo's own head (src.models.heads.train_linear_head: standardise + Linear + Adam) wrapped as a
-sklearn estimator: it is the reference every other model is compared against.
 """
 from __future__ import annotations
 
@@ -24,177 +24,76 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
-from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.decomposition import PCA
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import ParameterGrid
-from sklearn.naive_bayes import GaussianNB
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import Normalizer, StandardScaler
-from sklearn.svm import SVC, LinearSVC
-from sklearn.tree import DecisionTreeClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
 
 from src.core.logger import get_logger
 
 log = get_logger(__name__)
 
 _EPS = 1e-6
+PCA_ABOVE = 256        # inputs wider than this (the 768/1024-d embeddings) are reduced to PCA_DIM first
+PCA_DIM = 128
 
 
-# --------------------------------------------------------------------------------------- repo baseline as estimator
-class LinearHeadClassifier(BaseEstimator, ClassifierMixin):
-    """sklearn wrapper around src.models.heads.train_linear_head (the head AEGIS actually uses).
-    Hyperparameters come from cfg['experts']['head'] (lr, weight_decay, epochs, batch_size) unless overridden."""
-
-    def __init__(self, cfg: Optional[dict] = None, epochs: Optional[int] = None, seed: int = 0):
-        self.cfg = cfg
-        self.epochs = epochs
-        self.seed = seed
-
-    def _cfg(self) -> dict:
-        base = self.cfg or {"experts": {"head": {"lr": 1e-3, "weight_decay": 1e-4, "epochs": 20, "batch_size": 256}}}
-        head = dict(base["experts"]["head"])
-        if self.epochs is not None:
-            head["epochs"] = self.epochs
-        return {**base, "seed": self.seed, "experts": {**base["experts"], "head": head}}
-
-    def fit(self, X, y):
-        import torch
-        from src.models.heads import train_linear_head
-        self.classes_ = np.array([0, 1])
-        self.head_ = train_linear_head(torch.as_tensor(np.asarray(X), dtype=torch.float32),
-                                       torch.as_tensor(np.asarray(y)), self._cfg())
-        return self
-
-    def decision_function(self, X):
-        import torch
-        with torch.no_grad():
-            return self.head_(torch.as_tensor(np.asarray(X), dtype=torch.float32)).numpy().astype(float)
-
-
-# ------------------------------------------------------------------------------------------------- model zoo
+# ------------------------------------------------------------------------------------------------- the models
 @dataclass
 class ModelSpec:
     name: str
-    family: str                                   # linear / kernel / instance / tree / ensemble / neural / probabilistic
-    factory: Callable[..., Any]                   # factory(n_samples, n_features, seed, cfg, **params) -> estimator
+    family: str                                   # kernel / bagging / boosting
+    factory: Callable[..., Any]                   # factory(n_samples, n_features, seed, **params) -> estimator
     grid: Dict[str, List[Any]] = field(default_factory=dict)
     note: str = ""
 
 
-def _pca(k: int, n_samples: int, n_features: int, seed: int):
-    """PCA clamped to what the data allows; None when no reduction is needed (pipeline step 'passthrough')."""
-    k = min(k, n_features, max(n_samples - 1, 1))
-    return "passthrough" if k >= n_features else PCA(n_components=k, random_state=seed)
+def _reduce(n_samples: int, n_features: int, seed: int):
+    """PCA-128 for wide embeddings (keeps RBF-SVM / XGBoost fast); hand-crafted features and the 12-d gating input
+    are used as they are."""
+    if n_features <= PCA_ABOVE:
+        return "passthrough"
+    return PCA(n_components=min(PCA_DIM, max(n_samples - 1, 1)), random_state=seed)
 
 
-def _linear_head(n, d, seed, cfg, **p):
-    return LinearHeadClassifier(cfg=cfg, seed=seed, **p)
-
-
-def _logreg(n, d, seed, cfg, C=1.0):
-    return Pipeline([("scale", StandardScaler()), ("clf", LogisticRegression(C=C, max_iter=2000))])
-
-
-def _linear_svm(n, d, seed, cfg, C=0.01):
-    return Pipeline([("scale", StandardScaler()), ("clf", LinearSVC(C=C, max_iter=5000, random_state=seed))])
-
-
-def _rbf_svm(n, d, seed, cfg, C=1.0, pca=128):
-    return Pipeline([("scale", StandardScaler()), ("pca", _pca(pca, n, d, seed)),
+def _rbf_svm(n, d, seed, C=1.0):
+    return Pipeline([("scale", StandardScaler()), ("pca", _reduce(n, d, seed)),
                      ("clf", SVC(C=C, kernel="rbf", gamma="scale", random_state=seed))])
 
 
-def _knn(n, d, seed, cfg, k=15, pca=64):
-    # cosine geometry: L2-normalise, then Euclidean kNN == cosine ranking
-    return Pipeline([("l2", Normalizer()), ("pca", _pca(pca, n, d, seed)), ("l2b", Normalizer()),
-                     ("clf", KNeighborsClassifier(n_neighbors=max(1, min(k, n - 1)), weights="distance"))])
-
-
-def _tree(n, d, seed, cfg, max_depth=10):
-    return DecisionTreeClassifier(max_depth=max_depth, min_samples_leaf=5, random_state=seed)
-
-
-def _rf(n, d, seed, cfg, min_samples_leaf=1, n_estimators=300):
-    return RandomForestClassifier(n_estimators=n_estimators, min_samples_leaf=min_samples_leaf, max_features="sqrt",
+def _random_forest(n, d, seed, min_samples_leaf=1):
+    return RandomForestClassifier(n_estimators=300, min_samples_leaf=min_samples_leaf, max_features="sqrt",
                                   n_jobs=-1, random_state=seed)
 
 
-def _hgb(n, d, seed, cfg, max_leaf_nodes=31, pca=128, learning_rate=0.1):
-    return Pipeline([("pca", _pca(pca, n, d, seed)),
-                     ("clf", HistGradientBoostingClassifier(learning_rate=learning_rate, max_iter=300,
-                                                            max_leaf_nodes=max_leaf_nodes, early_stopping=True,
-                                                            validation_fraction=0.1, random_state=seed))])
-
-
-def _xgb(n, d, seed, cfg, max_depth=6, pca=128):
+def _xgboost(n, d, seed, max_depth=6):
     from xgboost import XGBClassifier
-    return Pipeline([("pca", _pca(pca, n, d, seed)),
+    return Pipeline([("pca", _reduce(n, d, seed)),
                      ("clf", XGBClassifier(n_estimators=400, max_depth=max_depth, learning_rate=0.1, subsample=0.8,
                                            colsample_bytree=0.8, tree_method="hist", n_jobs=-1, random_state=seed,
                                            verbosity=0))])
 
 
-def _mlp(n, d, seed, cfg, alpha=1e-3, hidden=256):
-    return Pipeline([("scale", StandardScaler()),
-                     ("clf", MLPClassifier(hidden_layer_sizes=(hidden,), alpha=alpha, early_stopping=True,
-                                           max_iter=300, random_state=seed))])
-
-
-def _lda(n, d, seed, cfg, pca=256):
-    return Pipeline([("scale", StandardScaler()), ("pca", _pca(pca, n, d, seed)),
-                     ("clf", LinearDiscriminantAnalysis(solver="lsqr", shrinkage="auto"))])
-
-
-def _gnb(n, d, seed, cfg, pca=64):
-    return Pipeline([("scale", StandardScaler()), ("pca", _pca(pca, n, d, seed)), ("clf", GaussianNB())])
-
-
-def _has(mod: str) -> bool:
-    try:
-        __import__(mod)
-        return True
-    except Exception:
-        return False
-
-
 MODEL_SPECS: Dict[str, ModelSpec] = {s.name: s for s in [
-    ModelSpec("linear_head", "linear", _linear_head, {}, "AEGIS head (reference): standardise + Linear + Adam"),
-    ModelSpec("logreg", "linear", _logreg, {"C": [0.01, 0.1, 1.0]}, "L2 logistic regression"),
-    ModelSpec("linear_svm", "linear", _linear_svm, {"C": [0.001, 0.01, 0.1]}, "linear SVM (hinge loss)"),
-    ModelSpec("lda", "probabilistic", _lda, {"pca": [64, 256]}, "LDA with Ledoit-Wolf shrinkage"),
-    ModelSpec("gaussian_nb", "probabilistic", _gnb, {"pca": [16, 64]}, "Gaussian Naive Bayes on PCA"),
-    ModelSpec("knn", "instance", _knn, {"k": [5, 15, 45]}, "kNN, cosine geometry, distance-weighted"),
-    ModelSpec("rbf_svm", "kernel", _rbf_svm, {"C": [1.0, 10.0]}, "RBF-kernel SVM on PCA-128"),
-    ModelSpec("decision_tree", "tree", _tree, {"max_depth": [5, 10, 20]}, "single CART tree"),
-    ModelSpec("random_forest", "ensemble", _rf, {"min_samples_leaf": [1, 5]}, "random forest, 300 trees"),
-    ModelSpec("hist_gb", "ensemble", _hgb, {"max_leaf_nodes": [15, 31]}, "histogram gradient boosting on PCA-128"),
-    ModelSpec("xgboost", "ensemble", _xgb, {"max_depth": [4, 6]}, "XGBoost on PCA-128 (optional dependency)"),
-    ModelSpec("mlp", "neural", _mlp, {"alpha": [1e-4, 1e-2]}, "MLP, 1 hidden layer (256), early stopping"),
+    ModelSpec("rbf_svm", "kernel", _rbf_svm, {"C": [1.0, 10.0]},
+              "SVM, Gaussian (RBF) kernel; standardised input (PCA-128 for embeddings)"),
+    ModelSpec("random_forest", "bagging", _random_forest, {"min_samples_leaf": [1, 5]},
+              "random forest, 300 trees, sqrt(d) features per split"),
+    ModelSpec("xgboost", "boosting", _xgboost, {"max_depth": [4, 6]},
+              "XGBoost, 400 boosted trees, lr 0.1 (PCA-128 for embeddings)"),
 ]}
 
-REFERENCE = "linear_head"
-# Every model in the zoo that can run here (xgboost only when installed).
-ALL_MODELS: Tuple[str, ...] = tuple(m for m in MODEL_SPECS if m != "xgboost" or _has("xgboost"))
-# Models compared by default against the reference: one kernel method and one tree ensemble. To compare more, add
-# names from ALL_MODELS here (or pass models=... / --models ...); nothing else needs to change.
-COMPARISON_MODELS: Tuple[str, ...] = ("rbf_svm", "random_forest")
-DEFAULT_MODELS: Tuple[str, ...] = (REFERENCE,) + COMPARISON_MODELS
-
-
-def available_models() -> List[str]:
-    return list(ALL_MODELS)
+DEFAULT_MODELS: Tuple[str, ...] = tuple(MODEL_SPECS)
 
 
 def build_model(name: str, n_samples: int, n_features: int, seed: int = 0, cfg: Optional[dict] = None, **params):
     if name not in MODEL_SPECS:
         raise KeyError(f"unknown model {name!r}; choose from {list(MODEL_SPECS)}")
-    return MODEL_SPECS[name].factory(n_samples, n_features, seed, cfg, **params)
+    return MODEL_SPECS[name].factory(n_samples, n_features, seed, **params)
 
 
 # ---------------------------------------------------------------------------------------------- scores / calibration
@@ -275,7 +174,7 @@ def tune(name: str, X_train, y_train, X_val, y_val, seed: int = 0, cfg: Optional
 
 # ------------------------------------------------------------------------------------- fusion-level stacker
 class SklearnStacker:
-    """Any zoo model on the 12-d gating input FeatureSet.X (quality | entropy | cosdist | p_cal), with the same
+    """Any of the three models on the 12-d gating input FeatureSet.X (quality | entropy | cosdist | p_cal), with the same
     fit/predict interface as src.learning.baselines.StaticLearnedWeights. Weights are NOT per-expert here: the model
     maps the whole profile to P(fake) directly (a learned meta-classifier, i.e. stacking)."""
 
@@ -300,8 +199,8 @@ class SklearnStacker:
 
 
 def fusion_grid(name: str) -> Dict[str, List[Any]]:
-    """Grids for the 12-d fusion input: PCA settings are meaningless there, keep the other knobs."""
-    return {k: v for k, v in MODEL_SPECS[name].grid.items() if k != "pca"}
+    """Hyperparameter grid used on the 12-d gating input (same grid as on the image features)."""
+    return dict(MODEL_SPECS[name].grid)
 
 
 def tune_stacker(name: str, fit_fs, fit_y, sel_fs, sel_y, seed: int = 0, cfg: Optional[dict] = None

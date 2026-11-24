@@ -1,25 +1,31 @@
-"""Comparison of classic ML models (src.learning.classic_models) on the frozen CLIP / DINOv2 embeddings.
+"""Machine learning vs the deep image models of AEGIS.
 
-Question: is the linear head AEGIS uses on each frozen backbone the right choice, or does a non-linear / instance-based
-/ ensemble model give a better (or more robust) expert? Evaluated on the SAME splits and scenario slices as the main
-ablation (src.evaluation.ablation):
+Question (machine-learning course): can classic machine-learning models detect AI-generated images as well as, or
+better than, the deep image models AEGIS is built from? Three models (src.learning.classic_models: RBF-SVM, random
+forest, XGBoost) are trained on three kinds of input and put next to the AEGIS models on the SAME test images:
 
+  feature sets   handcrafted  92 features computed from the pixels (src.data.handcrafted): no deep network at all
+                 clip, dinov2 frozen embeddings (same features as the AEGIS experts, a different classifier)
+                 clip+dinov2  concatenation (optional)
+  image models   clip_expert, dinov2_expert, freq_expert (SRM CNN), static_lr, aegis -- read from the bundles of the
+                 same head variant (src.learning.bundle_io), i.e. exactly the models of the main ablation
+
+Splits (as the main ablation, src.evaluation.ablation):
   train      = train_experts (`clean`: clean only; `aug`: clean + train_aug variants, as src.models.heads.train_records)
-  validation = val_gating_fit (clean + random val variants): hyperparameter choice + Platt calibration
+  validation = val_gating_fit: hyperparameter choice + Platt calibration of the machine-learning models
   test       = test_benchmark, read once after every model is fixed:
                S1 clean; S2 per JPEG level + 'all'; S3 per blur/resize level + 'all'
-  S4         = s4_eval (unseen generators, no adaptation), per generator with a disjoint balanced Real part
-               (same rule as ablation.partition_real) + 'all'
+  S4         = s4_eval (unseen generators, NO few-shot adaptation for any method), per generator with a disjoint
+               balanced Real part (same rule as ablation.partition_real) + 'all'
 
-Feature sets: clip, dinov2, clip+dinov2 (concatenation = early fusion, compared with AEGIS' late fusion elsewhere).
-Significance: paired cluster bootstrap (by source image) of delta = metric(model) - metric(linear_head), reusing
+Significance: paired cluster bootstrap (by source image) of delta = metric(ML model) - metric(AEGIS), reusing
 src.evaluation.significance.bootstrap_metrics.
 
-Also provides `run_fusion_comparison`: the same zoo as meta-classifiers on the 12-d gating input, against Static LR
+Also provides `run_fusion_comparison`: the three models as meta-classifiers on the 12-d gating input, against Static LR
 and AEGIS (fit on val_gating_fit, selected on val_gating_verify, evaluated on the test slices).
 
-CLI: python -m src.evaluation.ml_comparison --manifest M [--feature-sets clip dinov2 clip+dinov2]
-         [--head-variants clean aug] [--models logreg rbf_svm ...] [--out reports/ml_comparison] [--B 2000]
+CLI: python -m src.evaluation.ml_comparison --manifest M [--feature-sets handcrafted clip dinov2]
+         [--head-variants clean aug] [--models rbf_svm random_forest xgboost] [--out reports/ml_comparison] [--B 2000]
 """
 from __future__ import annotations
 
@@ -37,14 +43,24 @@ from src.core.contracts import SPLIT_S4_EVAL, SPLIT_TEST, SPLIT_VAL_FIT, SplitMa
 from src.core.logger import get_logger
 from src.evaluation.metrics import expected_calibration_error
 from src.evaluation.significance import bootstrap_metrics, point_metrics, summarize_delta
-from src.learning.classic_models import DEFAULT_MODELS, REFERENCE, describe_models, tune
+from src.learning.classic_models import DEFAULT_MODELS, describe_models, tune
 
 log = get_logger(__name__)
 
-FEATURE_SETS = ("clip", "dinov2", "clip+dinov2")
+FEATURE_SETS = ("handcrafted", "clip", "dinov2")
+FEATURE_PARTS = ("handcrafted", "clip", "dinov2")
 HEAD_VARIANTS = ("clean", "aug")
-RESULT_COLUMNS = ["head_variant", "feature_set", "scenario", "level", "generator", "model", "n", "auroc", "accuracy",
-                  "f1", "ece", "brier"]
+DEEP_SET = "image_models"           # feature_set value of the AEGIS image-model rows
+DEEP_METHODS: Dict[str, str] = {
+    "clip_expert": "CLIP ViT-L/14 (frozen) + linear head",
+    "dinov2_expert": "DINOv2 ViT-B/14 (frozen) + linear head",
+    "freq_expert": "SRM high-pass CNN (1.17 M params, trained from scratch)",
+    "static_lr": "3 experts, fixed learned weights (logistic regression on calibrated logits)",
+    "aegis": "3 experts + per-image gating network (full AEGIS, no few-shot adaptation)",
+}
+REFERENCE = "aegis"                 # significance: delta = ML model - AEGIS
+RESULT_COLUMNS = ["head_variant", "feature_set", "group", "scenario", "level", "generator", "model", "n", "auroc",
+                  "accuracy", "f1", "ece", "brier"]
 SIG_COLUMNS = ["head_variant", "feature_set", "scenario", "level", "generator", "model", "metric", "model_value",
                "reference_value", "delta", "ci_lo", "ci_hi", "p_value", "significant", "n", "n_clusters", "B"]
 
@@ -70,13 +86,22 @@ class EmbeddingSplit:
                               pick(self.level), pick(self.generator))
 
 
-def open_caches(cfg: Config, feature_set: str) -> list:
+def open_caches(cfg: Config, feature_set: str, man: Optional[SplitManifest] = None) -> list:
+    """Feature caches of a feature set ('handcrafted', 'clip', 'dinov2' or a '+' combination). Hand-crafted features
+    are computed on first use when a manifest is given (resumable, a few minutes on a CPU)."""
     from src.models.cache import FeatureCache
     names = feature_set.split("+")
     for n in names:
-        if n not in ("clip", "dinov2"):
-            raise ValueError(f"feature set parts must be clip/dinov2, got {n!r}")
-    return [FeatureCache.open(cfg, n) for n in names]
+        if n not in FEATURE_PARTS:
+            raise ValueError(f"feature set parts must be one of {FEATURE_PARTS}, got {n!r}")
+    caches = []
+    for n in names:
+        if n == "handcrafted":
+            from src.data.handcrafted import build_cache, open_cache
+            caches.append(build_cache(cfg, man) if man is not None else open_cache(cfg))
+        else:
+            caches.append(FeatureCache.open(cfg, n))
+    return caches
 
 
 def load_split(man: SplitManifest, records, caches) -> EmbeddingSplit:
@@ -93,7 +118,7 @@ def load_split(man: SplitManifest, records, caches) -> EmbeddingSplit:
 
 def load_all(cfg: Config, man: SplitManifest, feature_set: str, head_variant: str) -> Dict[str, EmbeddingSplit]:
     from src.models.heads import train_records
-    caches = open_caches(cfg, feature_set)
+    caches = open_caches(cfg, feature_set, man)
     return {"train": load_split(man, train_records(man, head_variant), caches),
             "val": load_split(man, man.by_split(SPLIT_VAL_FIT), caches),
             "test": load_split(man, man.by_split(SPLIT_TEST), caches),
@@ -149,17 +174,63 @@ def slice_metrics(y: np.ndarray, p: np.ndarray, ece_bins: int = 15) -> Dict[str,
             "brier": float(np.mean((p - y) ** 2))}
 
 
+# ------------------------------------------------------------------------------------------ AEGIS image models
+def deep_predictions(cfg: Config, head_variant: str, seed: Optional[int] = None,
+                     bundles: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Dict[str, float]]]:
+    """P(fake) of every AEGIS image model, keyed by image sha256: {'test'|'s4': {method: {sha: p}}}.
+    Fitted exactly like the main ablation (calibration + Static LR + gating on val_gating_fit); S4 without
+    adaptation, so every method in the comparison sees the unseen generators cold."""
+    from src.core.contracts import EXPERT_NAMES
+    from src.evaluation.ablation import _System
+    seed = int(cfg.get("seed", 0) if seed is None else seed)
+    if bundles is None:
+        from src.learning.bundle_io import bundle_path, load_split as load_bundle
+        need = ["val_gating_fit", "test_benchmark", "s4_eval"]
+        missing = [s for s in need if not bundle_path(cfg, s, head_variant).exists()]
+        if missing:
+            raise FileNotFoundError(f"bundles {missing} ({head_variant}) not found: run notebook 02 "
+                                    f"(src.models.bundle) first")
+        bundles = {s: load_bundle(cfg, s, head_variant) for s in need}
+    sysm = _System(cfg, bundles["val_gating_fit"], True, True, seed)
+    out: Dict[str, Dict[str, Dict[str, float]]] = {}
+    for key, split in (("test", "test_benchmark"), ("s4", "s4_eval")):
+        b = bundles.get(split)
+        if b is None:
+            continue
+        fs = sysm.pipe.transform(b)
+        preds = {f"{e}_expert": fs.p[:, j] for j, e in enumerate(EXPERT_NAMES)}
+        preds["static_lr"] = sysm.models["static_lr"].predict(fs)
+        preds["aegis"] = sysm.models["aegis"].predict(fs)
+        out[key] = {m: dict(zip(b.sha256, np.asarray(p, dtype=float))) for m, p in preds.items()}
+    return out
+
+
+def align_predictions(by_sha: Dict[str, Dict[str, Dict[str, float]]], data: Dict[str, EmbeddingSplit]
+                      ) -> Dict[str, Dict[str, np.ndarray]]:
+    """{split: {method: {sha: p}}} -> {split: {method: array in the order of data[split].sha256}}."""
+    out: Dict[str, Dict[str, np.ndarray]] = {}
+    for key, methods in by_sha.items():
+        shas = data[key].sha256
+        out[key] = {}
+        for m, d in methods.items():
+            miss = sum(1 for s in shas if s not in d)
+            if miss:
+                raise KeyError(f"{miss} {key} images missing from the {m} predictions: bundles and manifest differ")
+            out[key][m] = np.array([d[s] for s in shas], dtype=float)
+    return out
+
+
 # ---------------------------------------------------------------------------------------------------- runner
 def compare_on_embeddings(cfg: Config, data: Dict[str, EmbeddingSplit], models: Sequence[str] = DEFAULT_MODELS,
-                          B: int = 2000, seed: Optional[int] = None, tags: Optional[Dict[str, Any]] = None
+                          B: int = 2000, seed: Optional[int] = None, tags: Optional[Dict[str, Any]] = None,
+                          fixed: Optional[Dict[str, Dict[str, np.ndarray]]] = None, fixed_rows: bool = True
                           ) -> Dict[str, List[Dict[str, Any]]]:
-    """Tune every model on train/val, then evaluate test + s4 once. Returns {'results', 'significance', 'tuning',
-    'timing'} row lists (tags are copied into every row)."""
+    """Tune every ML model on train/val, then evaluate test + s4 once, next to the `fixed` predictions of the AEGIS
+    image models (aligned with data[split]). Returns {'results', 'significance', 'tuning', 'timing'} row lists.
+    `fixed_rows=False` skips the result rows of the fixed models (they are written once per head variant)."""
     seed = int(cfg.get("seed", 0) if seed is None else seed)
     tags = dict(tags or {})
-    models = list(models)
-    if REFERENCE not in models:
-        models = [REFERENCE] + models
+    fixed = fixed or {}
     tr, va = data["train"], data["val"]
     tuned = {m: tune(m, tr.X, tr.y, va.X, va.y, seed=seed, cfg=cfg) for m in models}
 
@@ -181,21 +252,28 @@ def compare_on_embeddings(cfg: Config, data: Dict[str, EmbeddingSplit], models: 
         sub = data[src].subset(idx)
         if len(sub) == 0:
             continue
-        cell = {**tags, "scenario": scen, "level": lvl, "generator": gen}
+        cell = {"scenario": scen, "level": lvl, "generator": gen}
+        deep = fixed.get(src, {})
+        if fixed_rows:
+            for m in DEEP_METHODS:
+                if m in deep:
+                    results.append({**tags, "feature_set": DEEP_SET, "group": "deep", **cell, "model": m,
+                                    "n": len(sub), **slice_metrics(sub.y, deep[m][idx], ece_bins)})
         for m in tuned:
-            results.append({**cell, "model": m, "n": len(sub), **slice_metrics(sub.y, preds[src][m][idx], ece_bins)})
-        if B <= 0 or len(np.unique(sub.y)) < 2:
+            results.append({**tags, "group": "ml", **cell, "model": m, "n": len(sub),
+                            **slice_metrics(sub.y, preds[src][m][idx], ece_bins)})
+        if B <= 0 or REFERENCE not in deep or len(np.unique(sub.y)) < 2:
             continue
         cl = np.unique(np.array(sub.cluster), return_inverse=True)[1]
-        boot = bootstrap_metrics(sub.y, {m: preds[src][m][idx] for m in tuned}, B=B, seed=seed, clusters=cl)
-        ref_pt = point_metrics(sub.y, preds[src][REFERENCE][idx])
+        scores = {m: preds[src][m][idx] for m in tuned}
+        scores[REFERENCE] = deep[REFERENCE][idx]
+        boot = bootstrap_metrics(sub.y, scores, B=B, seed=seed, clusters=cl)
+        ref_pt = point_metrics(sub.y, scores[REFERENCE])
         for m in tuned:
-            if m == REFERENCE:
-                continue
-            mp = point_metrics(sub.y, preds[src][m][idx])
+            mp = point_metrics(sub.y, scores[m])
             for met in ("auroc", "accuracy"):
                 res = summarize_delta(boot[m][met] - boot[REFERENCE][met], mp[met] - ref_pt[met])
-                sig.append({**cell, "model": m, "metric": met, "model_value": mp[met],
+                sig.append({**tags, **cell, "model": m, "metric": met, "model_value": mp[met],
                             "reference_value": ref_pt[met], **res, "n": len(sub),
                             "n_clusters": int(cl.max() + 1), "B": B})
     trials = [{**tags, **t} for tm in tuned.values() for t in tm.trials]
@@ -204,16 +282,18 @@ def compare_on_embeddings(cfg: Config, data: Dict[str, EmbeddingSplit], models: 
 
 def run_comparison(cfg: Config, man: SplitManifest, feature_sets: Sequence[str] = FEATURE_SETS,
                    head_variants: Sequence[str] = HEAD_VARIANTS, models: Sequence[str] = DEFAULT_MODELS,
-                   out_dir: Optional[str | Path] = None, B: int = 2000, seed: Optional[int] = None
-                   ) -> Dict[str, List[Dict[str, Any]]]:
+                   out_dir: Optional[str | Path] = None, B: int = 2000, seed: Optional[int] = None,
+                   include_image_models: bool = True) -> Dict[str, List[Dict[str, Any]]]:
     out: Dict[str, List[Dict[str, Any]]] = {"results": [], "significance": [], "tuning": [], "timing": []}
     for hv in head_variants:
-        for fs in feature_sets:
+        by_sha = deep_predictions(cfg, hv, seed) if include_image_models else {}
+        for i, fs in enumerate(feature_sets):
             log.info("=== head_variant=%s feature_set=%s", hv, fs)
             data = load_all(cfg, man, fs, hv)
             log.info("train %d | val %d | test %d | s4 %d  (dim %d)", len(data["train"]), len(data["val"]),
                      len(data["test"]), len(data["s4"]), data["train"].X.shape[1])
-            part = compare_on_embeddings(cfg, data, models, B, seed, {"head_variant": hv, "feature_set": fs})
+            part = compare_on_embeddings(cfg, data, models, B, seed, {"head_variant": hv, "feature_set": fs},
+                                         fixed=align_predictions(by_sha, data), fixed_rows=(i == 0))
             for k in out:
                 out[k] += part[k]
     if out_dir is not None:
@@ -225,7 +305,7 @@ def run_comparison(cfg: Config, man: SplitManifest, feature_sets: Sequence[str] 
 def run_fusion_comparison(cfg: Config, head_variant: Optional[str] = "aug", models: Sequence[str] = DEFAULT_MODELS,
                           seed: Optional[int] = None, bundles: Optional[Dict[str, Any]] = None
                           ) -> List[Dict[str, Any]]:
-    """Zoo models as meta-classifiers on the 12-d gating input vs Static LR / naive average / AEGIS (variant 'full').
+    """The ML models as meta-classifiers on the 12-d gating input vs Static LR / naive average / AEGIS (variant 'full').
     Fit on val_gating_fit, hyperparameters on val_gating_verify (if that bundle exists, else default params), test once.
     `bundles` may be passed directly ({split: Bundle}); otherwise they are loaded from the cache."""
     from src.evaluation.ablation import _slices, _System
@@ -241,8 +321,6 @@ def run_fusion_comparison(cfg: Config, head_variant: Optional[str] = "aug", mode
     ver_fs = sysm.pipe.transform(ver) if ver is not None else None
     stackers, chosen = {}, {}
     for m in models:
-        if m == REFERENCE:
-            continue                       # linear_head is an embedding-level model only
         if ver_fs is not None:
             st, params, _ = tune_stacker(m, sysm.fit_fs, sysm.fit_y, ver_fs, ver.label, seed, cfg)
         else:
@@ -276,13 +354,15 @@ def _write_csv(rows: List[Dict[str, Any]], path: Path, columns: Optional[List[st
 
 
 def summary_table(results: List[Dict[str, Any]], metric: str = "auroc") -> List[str]:
-    """Markdown: one row per (head_variant, feature_set, model), columns = pooled scenarios."""
+    """Markdown: one row per (head_variant, feature_set, model), AEGIS image models first; columns = pooled
+    scenarios."""
     cols = [("S1", "clean", "all"), ("S2", "all", "all"), ("S3", "all", "all")]
     cols += sorted({(r["scenario"], r["level"], r["generator"]) for r in results if r["scenario"] == "S4"},
                    key=lambda c: (c[2] == "all", c[2]))
     idx = {(r["head_variant"], r["feature_set"], r["model"], r["scenario"], r["level"], r["generator"]): r[metric]
            for r in results}
     keys = list(dict.fromkeys((r["head_variant"], r["feature_set"], r["model"]) for r in results))
+    keys.sort(key=lambda k: (k[0] != "clean", k[1] != DEEP_SET))      # stable: keeps the run order otherwise
     head = ["head", "features", "model"] + [f"{s} {g if s == 'S4' else l}" for s, l, g in cols]
     lines = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
     for hv, fs, m in keys:
@@ -298,12 +378,17 @@ def write_outputs(out: Dict[str, List[Dict[str, Any]]], out_dir: str | Path) -> 
     _write_csv(out["significance"], d / "significance.csv", SIG_COLUMNS)
     _write_csv(out["tuning"], d / "tuning.csv")
     _write_csv(out["timing"], d / "timing.csv")
-    md = ["# Classic ML models on frozen embeddings", "",
-          f"Reference model: `{REFERENCE}` (the head AEGIS uses). AUROC on test_benchmark / s4_eval.", ""]
+    md = ["# Machine learning vs the deep image models of AEGIS", "",
+          f"Rows with features `{DEEP_SET}` are the AEGIS models (deep learning); the other rows are the "
+          "machine-learning models on hand-crafted features or on frozen embeddings. AUROC on test_benchmark / "
+          "s4_eval (S4 without few-shot adaptation for every method). Significance (significance.csv) is ML model "
+          f"minus `{REFERENCE}`.", ""]
     md += summary_table(out["results"], "auroc") + ["", "## Accuracy", ""] + summary_table(out["results"], "accuracy")
-    md += ["", "## Models", "", "| model | family | grid | note |", "|---|---|---|---|"]
-    md += [f"| {r['model']} | {r['family']} | {r['grid']} | {r['note']} |"
-           for r in describe_models(sorted({r['model'] for r in out['results']}))]
+    present = {r["model"] for r in out["results"]}
+    md += ["", "## Models", "", "| model | group | description |", "|---|---|---|"]
+    md += [f"| {m} | deep learning (AEGIS) | {d} |" for m, d in DEEP_METHODS.items() if m in present]
+    md += [f"| {r['model']} | machine learning ({r['family']}) | {r['note']}; grid {r['grid']} |"
+           for r in describe_models([m for m in DEFAULT_MODELS if m in present])]
     (d / "summary.md").write_text("\n".join(md) + "\n", encoding="utf-8")
     log.info("ML comparison written to %s", d)
 

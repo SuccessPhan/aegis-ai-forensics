@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.14](https://img.shields.io/badge/Python-3.14-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch 2.11](https://img.shields.io/badge/PyTorch-2.11%20(CUDA%2012.8)-ee4c2c.svg)](https://pytorch.org/)
-[![Tests: 152 passing](https://img.shields.io/badge/tests-152%20passing-success.svg)](#running-the-tests)
+[![Tests: 160 passing](https://img.shields.io/badge/tests-160%20passing-success.svg)](#running-the-tests)
 [![Status: Research prototype](https://img.shields.io/badge/Status-Research%20prototype-orange.svg)](#limitations)
 
 > *"An intelligent detection system should not only recognize what it knows, but also understand what it does not know, decide when it needs to adapt, and verify whether its adaptation actually improves reliability."*
@@ -228,7 +228,7 @@ Developed on Windows 11, Python 3.14, PyTorch 2.11 + CUDA 12.8, RTX 4060 Laptop 
 ### 2. Running the tests
 
 ```bash
-python -m pytest tests/ -q        # 152 tests on a synthetic toy dataset, no downloads
+python -m pytest tests/ -q        # 160 tests on a synthetic toy dataset, no downloads
 ```
 
 ### 3. Data
@@ -253,7 +253,7 @@ python -m src.evaluation.select_fusion                             # validation 
 python -m src.evaluation.ablation --s4-seeds 0 1 2 3 4 --out reports/v3 --save-predictions
 python -m src.evaluation.significance --pred reports/v3/predictions --out reports/v3 --manifest $M
 python -m src.evaluation.weights_analysis --pred reports/v3/predictions --out reports/v3 --manifest $M
-python -m src.evaluation.ml_comparison --manifest $M --out reports/ml_comparison   # classic ML models, see below
+python -m src.evaluation.ml_comparison --manifest $M --out reports/ml_comparison   # ML vs image models, see below
 ```
 
 ### 5. Notebooks
@@ -266,25 +266,33 @@ or from `notebooks/`):
 | `01_data_preparation` | `fetch_genimage.py`, `src.data.ingest`, shortcut audit + dataset statistics | yes (demo) |
 | `02_experts_and_bundles` | `src.models.extract`, `src.models.heads`, `src.models.bundle` | no (needs GPU + data) |
 | `03_aegis_evaluation` | `select_fusion`, `ablation`, `significance`, `weights_analysis`, `export` | yes (demo) |
-| `04_ml_model_comparison` | `src.evaluation.ml_comparison` + plots, fusion-level and unsupervised analysis | yes (demo) |
+| `04_ml_model_comparison` | hand-crafted features + `src.evaluation.ml_comparison`: SVM / random forest / XGBoost vs the AEGIS image models, fusion level, unsupervised analysis | yes (demo) |
 
 If `data/normalized_v2/manifest.json` is missing, notebooks 01/03/04 switch to **demo mode**
 (`src/models/demo_features.py`): synthetic images, image-derived pseudo-embeddings and bundles in the real formats,
 about one minute on a CPU. Demo numbers carry no scientific meaning; they only show that the code runs.
 
-### 6. Classic machine-learning comparison
+### 6. Machine learning vs the deep image models
 
-`src.evaluation.ml_comparison` asks whether the linear head on each frozen backbone is the right choice. Two models,
-an **RBF-kernel SVM** and a **random forest** (`COMPARISON_MODELS` in `src/learning/classic_models.py`), are compared
-with the AEGIS `linear_head`; the module also contains logistic regression, linear SVM, LDA, Gaussian NB, kNN, decision
-tree, histogram gradient boosting, XGBoost and MLP, which run with `--models ...` or by adding them to
-`COMPARISON_MODELS`. The comparison runs on
-CLIP, DINOv2 and CLIP+DINOv2 features, on the same splits and S1-S4 slices as the ablation. Protocol: train on
-`train_experts`, choose hyperparameters by AUROC on `val_gating_fit`, Platt-calibrate on the same split, evaluate
-`test_benchmark` / `s4_eval` once, paired cluster bootstrap against `linear_head`. `run_fusion_comparison` uses the same
-zoo as meta-classifiers on the 12-d gating input against Static LR and AEGIS. Outputs: `results.csv`,
-`significance.csv`, `tuning.csv`, `timing.csv`, `summary.md`.
+`src.evaluation.ml_comparison` asks whether classic machine-learning models can detect AI-generated images as well as
+the deep image models AEGIS is built from. Three models (`src/learning/classic_models.py`): an **RBF-kernel SVM**, a
+**random forest** and **XGBoost** are trained on
 
+- **92 hand-crafted features** computed from the pixels (`src/data/handcrafted.py`: colour statistics, radial FFT
+  spectrum, SRM noise residual statistics, LBP texture, gradients), with no deep network involved;
+- the frozen **CLIP / DINOv2 embeddings** (same features as the AEGIS experts, a different classifier),
+
+and compared on the same test images with `clip_expert`, `dinov2_expert`, `freq_expert`, `static_lr` and `aegis`
+(read from the bundles). Protocol: train on `train_experts`, choose hyperparameters by AUROC on `val_gating_fit`,
+Platt-calibrate on the same split, evaluate `test_benchmark` / `s4_eval` once (S4 without few-shot adaptation for every
+method), paired cluster bootstrap of each ML model against `aegis`. `run_fusion_comparison` uses the same three models
+in place of the gating network on the 12-d gating input. Outputs: `results.csv`, `significance.csv`, `tuning.csv`,
+`timing.csv`, `summary.md`.
+
+```bash
+python -m src.data.handcrafted --manifest $M            # hand-crafted features (CPU, a few minutes; cached)
+python -m src.evaluation.ml_comparison --manifest $M --out reports/ml_comparison
+```
 
 ---
 
