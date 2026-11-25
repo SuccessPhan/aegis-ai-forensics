@@ -55,6 +55,7 @@ What the results support:
 2. **The gating network routes in the right direction**: under blur it moves weight from CLIP to DINOv2; under JPEG it lowers the frequency expert's weight. This pattern repeats in every experiment round.
 3. **Two gains replicate** across a different dataset and split (v1 → v3): blur/resize with clean heads, and few-shot adaptation on Midjourney at N = 20.
 4. **Routing is already close to its ceiling.** An oracle that knows the degradation level and picks the best fixed weights for it beats AEGIS by at most ~0.01 AUROC, so the remaining limit is expert quality, not routing.
+5. **Deep features are needed once images degrade.** Classic machine-learning models (SVM, random forest, XGBoost) on 92 hand-crafted pixel features reach 0.90–0.95 AUROC on clean images but fall to 0.54–0.61 under blur/resize, about the same as the frequency expert (see [Machine-learning baselines](#machine-learning-baselines)).
 
 What they do not support: AEGIS does **not** beat a static learned weighting on clean or JPEG images, and a single CLIP expert is very strong on Midjourney.
 
@@ -136,6 +137,23 @@ A logistic regression that sees only three image-quality features should score 0
 ### Yellow flag
 
 The flag rate rises with degradation (7.4% on clean images, 25.6% under JPEG, 30.0% under blur/resize), and accuracy on unflagged images is higher than overall (e.g. blur/resize, clean heads: 0.728 → 0.780).
+
+### Machine-learning baselines
+
+Test AUROC with clean expert heads (S2 and S3 pool their levels; S4 is Midjourney without few-shot adaptation). In brackets: difference to AEGIS; `*` = 95% bootstrap interval excludes 0. Source: [`reports/ml_comparison/summary.md`](reports/ml_comparison/summary.md).
+
+| Model | Features | S1 clean | S2 JPEG | S3 blur / resize | S4 Midjourney |
+|---|---|---|---|---|---|
+| **AEGIS** | three experts + gating | **0.993** | **0.865** | **0.822** | 0.957 |
+| Frequency expert | SRM high-pass (CNN) | 0.985 | 0.548 | 0.541 | 0.829 |
+| RBF-SVM | 92 hand-crafted | 0.948 (−0.045\*) | 0.746 (−0.119\*) | 0.544 (−0.278\*) | 0.789 (−0.168\*) |
+| Random forest | 92 hand-crafted | 0.899 (−0.093\*) | 0.681 (−0.184\*) | 0.542 (−0.279\*) | 0.810 (−0.147\*) |
+| XGBoost | 92 hand-crafted | 0.947 (−0.046\*) | 0.753 (−0.112\*) | 0.607 (−0.215\*) | 0.798 (−0.159\*) |
+| RBF-SVM | CLIP embedding | 0.994 (+0.001) | 0.861 (−0.003) | 0.726 (−0.096\*) | **0.962** (+0.005\*) |
+
+- Hand-crafted features lose their signal under blur, exactly like the frequency expert: both rely on low-level traces that blurring removes. The fairer single comparison for them is the frequency expert, since the ML models train on `train_experts` only while the AEGIS gating also sees degraded validation images.
+- On the same CLIP embedding, an SVM matches AEGIS on clean and JPEG images and is slightly better on Midjourney, but falls well behind under blur: a better classifier on one expert does not replace combining several experts.
+- Some of the clean-image score of the hand-crafted models may come from the residual shortcut (they include sharpness and spectrum statistics, the kind of signal the shortcut audit measures).
 
 ## How It Works
 
