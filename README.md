@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.14](https://img.shields.io/badge/Python-3.14-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch 2.11](https://img.shields.io/badge/PyTorch-2.11%20(CUDA%2012.8)-ee4c2c.svg)](https://pytorch.org/)
-[![Tests: 160 passing](https://img.shields.io/badge/tests-160%20passing-success.svg)](#running-the-tests)
+[![Tests: 169 passing](https://img.shields.io/badge/tests-169%20passing-success.svg)](#running-the-tests)
 [![Status: Research prototype](https://img.shields.io/badge/Status-Research%20prototype-orange.svg)](#limitations)
 
 > *"An intelligent detection system should not only recognize what it knows, but also understand what it does not know, decide when it needs to adapt, and verify whether its adaptation actually improves reliability."*
@@ -63,7 +63,7 @@ What they do not support: AEGIS does **not** beat a static learned weighting on 
 
 ## What We Achieved
 
-- **A complete, reproducible system**, from raw data to web demo: data audit → three experts → gating → few-shot adaptation → evaluation → FastAPI server → web frontend. Re-running the evaluation reproduces the results **byte for byte**; 160 automated tests.
+- **A complete, reproducible system**, from raw data to web demo: data audit → three experts → gating → few-shot adaptation → evaluation → FastAPI server → web frontend. Re-running the evaluation reproduces the results **byte for byte**; 169 automated tests.
 - **Found and measured a dataset shortcut** in GenImage (file format and size leak the label, 0.706 AUROC from image-quality features alone), reduced it to 0.63, and report the remainder as a `quality_only` floor instead of hiding it.
 - **Statistically significant, replicated gains** in two places: blur/resize (+0.013 AUROC over the strongest static ensemble) and few-shot adaptation to an unseen generator (+0.014 over a baseline given the same labelled samples).
 - **Showed that the gating behaves as designed**: weights move away from the expert that is failing under each degradation, and the system ends within ~0.01 AUROC of an oracle that knows the degradation in advance.
@@ -224,7 +224,7 @@ aegis-ai-forensics/
 ├── notebooks/               # Jupyter: data prep, experts/bundles, AEGIS evaluation, classic-ML comparison
 ├── web/                     # Next.js frontend (Vercel)
 ├── scripts/                 # data download, toy dataset, PDF→Markdown, server launcher
-├── tests/                   # 160 pytest tests
+├── tests/                   # 169 pytest tests
 └── data/, reports/          # images, caches, models, experiment outputs (generated, not in git)
 ```
 
@@ -246,7 +246,7 @@ Developed on Windows 11, Python 3.14, PyTorch 2.11 + CUDA 12.8, RTX 4060 Laptop 
 ### 2. Running the tests
 
 ```bash
-python -m pytest tests/ -q        # 160 tests on a synthetic toy dataset, no downloads
+python -m pytest tests/ -q        # 169 tests on a synthetic toy dataset, no downloads
 ```
 
 ### 3. Data
@@ -285,6 +285,7 @@ or from `notebooks/`):
 | `02_experts_and_bundles` | `src.models.extract`, `src.models.heads`, `src.models.bundle` | no (needs GPU + data) |
 | `03_aegis_evaluation` | `select_fusion`, `ablation`, `significance`, `weights_analysis`, `export` | yes (demo) |
 | `04_ml_model_comparison` | hand-crafted features + `src.evaluation.ml_comparison`: SVM / random forest / XGBoost vs the AEGIS image models, fusion level, unsupervised analysis | yes (demo) |
+| `05_external_test` | `scripts/fetch_external.py`, `src.data.external`, `src.evaluation.external_eval`: unseen generators of other families | yes (demo) |
 
 If `data/normalized_v2/manifest.json` is missing, notebooks 01/03/04 switch to **demo mode**
 (`src/models/demo_features.py`): synthetic images, image-derived pseudo-embeddings and bundles in the real formats,
@@ -311,6 +312,28 @@ in place of the gating network on the 12-d gating input. Outputs: `results.csv`,
 python -m src.data.handcrafted --manifest $M            # hand-crafted features (CPU, a few minutes; cached)
 python -m src.evaluation.ml_comparison --manifest $M --out reports/ml_comparison
 ```
+
+### 7. External test set (v4): other generator families
+
+S4 holds out Midjourney and VQDM, but both are diffusion models like the training generators (ADM, SD v1.4) and all
+GenImage images share ImageNet content, so S4 measures generalisation *inside* one family. An external test set
+(FLUX, DALL-E 3, Midjourney v6, GANs, non-ImageNet real photos, ...) measures it *outside*:
+
+```bash
+python scripts/fetch_external.py --dataset <hf-dataset-id> --out data/raw/external/newgen --generator-column generator
+python -m src.data.external --root data/raw/external/newgen --name newgen          # same normalisation as GenImage
+python -m src.models.extract --manifest data/external/newgen/manifest.json --expert clip   --splits ext_newgen
+python -m src.models.extract --manifest data/external/newgen/manifest.json --expert dinov2 --splits ext_newgen
+python -m src.models.bundle  --manifest data/external/newgen/manifest.json --split ext_newgen --head-variant aug \
+       --out data/cache/bundles/aug/ext_newgen.pt                               # and --head-variant clean
+python -m src.evaluation.external_eval --manifest $M --external data/external/newgen/manifest.json
+```
+
+Any folder with `real/` and one sub-folder per generator works (`src/data/external.py`); `--no-harmonize` keeps the
+original encoding of the AI images (the "web" setting), and `--real-from-main` adds the clean real images of
+`test_benchmark` for sets without real photos. Nothing is retrained: AEGIS, its experts and the three ML models of
+section 6 score the new images, per generator, next to their in-family S4 results. Notebook
+`05_external_test.ipynb` runs the whole procedure (demo mode without data).
 
 ---
 
