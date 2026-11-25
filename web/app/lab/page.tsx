@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import Lab from "./Lab";
 
 export const metadata: Metadata = {
-  title: "AEGIS – Chế độ phòng thí nghiệm",
-  description: "Xem trọng số ba chuyên gia của AEGIS thay đổi khi ảnh bị làm mờ hoặc nén mạnh.",
+  title: "AEGIS – Bộ điều phối",
+  description: "Trọng số ba chuyên gia của AEGIS thay đổi thế nào khi ảnh bị làm mờ hoặc nén mạnh.",
   robots: { index: false, follow: false },
 };
 

@@ -1,60 +1,23 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
-import ServerStatus, { useServerState } from "./ServerStatus";
 import { API_URL, ApiError, FlagReason, PredictResponse, predict, validateFile } from "./api";
 
 const REASON_TEXT: Record<FlagReason, string> = {
-  conflict: "Các chuyên gia mâu thuẫn mạnh",
-  uncertain: "Kết quả nằm trong vùng lưỡng lự",
-  ood: "Ảnh khác xa dữ liệu hệ thống đã học",
+  conflict: "các chuyên gia mâu thuẫn",
+  uncertain: "kết quả lưỡng lự",
+  ood: "ảnh khác xa dữ liệu đã học",
 };
 
-const EXPERTS: { key: "clip" | "dinov2" | "freq"; name: string }[] = [
-  { key: "clip", name: "CLIP – ngữ nghĩa" },
-  { key: "dinov2", name: "DINOv2 – cấu trúc" },
-  { key: "freq", name: "Tần số – SRM" },
+const EXPERTS: { key: "clip" | "dinov2" | "freq"; name: string; role: string }[] = [
+  { key: "clip", name: "CLIP", role: "ngữ nghĩa" },
+  { key: "dinov2", name: "DINOv2", role: "cấu trúc" },
+  { key: "freq", name: "Tần số", role: "dấu vết SRM" },
 ];
 
-const pct = (x: number, d = 0) => `${(x * 100).toFixed(d)}%`;
+const pct = (x: number) => `${Math.round(x * 100)}%`;
 
-function describeQuality(q: PredictResponse["quality"]) {
-  const j = q.jpeg_quality_est;
-  const jpeg =
-    j >= 90
-      ? "gần như không bị nén hoặc nén rất nhẹ"
-      : j >= 70
-        ? "đã bị nén JPEG ở mức vừa phải"
-        : "đã bị nén JPEG khá mạnh";
-  const l = q.log_laplacian_var;
-  const sharp =
-    l >= 6 ? "khá sắc nét, nhiều chi tiết" : l >= 4 ? "độ sắc nét trung bình" : "khá mờ hoặc ít chi tiết";
-  const h = q.high_freq_energy_ratio;
-  const hf =
-    h >= 0.05
-      ? "nhiều chi tiết mịn/nhiễu tần số cao"
-      : h >= 0.015
-        ? "lượng chi tiết mịn ở mức vừa"
-        : "ít chi tiết mịn (ảnh mượt)";
-  return [
-    { k: "Mức nén JPEG ước lượng", v: `${j.toFixed(0)}/100`, d: jpeg },
-    { k: "Độ sắc nét", v: l.toFixed(2), d: sharp },
-    { k: "Năng lượng tần số cao", v: h.toFixed(3), d: hf },
-  ];
-}
-
-function Logo() {
-  return (
-    <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden="true">
-      <path d="M16 2.5l11.5 4v8.2c0 7.2-4.8 12.6-11.5 14.8C9.3 27.3 4.5 21.9 4.5 14.7V6.5z" fill="var(--accent)" />
-      <circle cx="16" cy="14.5" r="5" fill="none" stroke="var(--accent-fg)" strokeWidth="2" />
-      <circle cx="16" cy="14.5" r="1.8" fill="var(--accent-fg)" />
-    </svg>
-  );
-}
-
-export default function Demo({ children }: { children?: React.ReactNode }) {
+export default function Demo() {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -63,7 +26,6 @@ export default function Demo({ children }: { children?: React.ReactNode }) {
   const [drag, setDrag] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const server = useServerState();
 
   useEffect(() => {
     return () => {
@@ -71,7 +33,7 @@ export default function Demo({ children }: { children?: React.ReactNode }) {
     };
   }, [preview]);
   useEffect(() => () => abortRef.current?.abort(), []);
-  // On phones the result card sits below the preview: bring it into view once it arrives.
+  // On phones the result panel sits below the upload column: bring it into view once it arrives.
   useEffect(() => {
     if (!result || window.innerWidth >= 900) return;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -96,8 +58,7 @@ export default function Demo({ children }: { children?: React.ReactNode }) {
     setError(null);
     setResult(null);
     try {
-      const r = await predict(f, ac.signal);
-      setResult(r);
+      setResult(await predict(f, ac.signal));
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") return;
       setError(e instanceof ApiError ? e.message : "Đã có lỗi xảy ra. Vui lòng thử lại.");
@@ -126,239 +87,171 @@ export default function Demo({ children }: { children?: React.ReactNode }) {
   );
 
   return (
-    <>
-      <header className="top">
-        <div className="wrap top-in">
-          <div className="brand">
-            <Logo />
-            <span className="brand-name">AEGIS</span>
-            <span className="badge">Bản demo nghiên cứu</span>
-          </div>
-          <div className="top-r">
-            <Link className="lablink" href="/lab">Chế độ phòng thí nghiệm</Link>
-            {API_URL && <ServerStatus state={server} />}
-          </div>
-        </div>
-      </header>
+    <main className="wrap home">
+      <section className="home-l" aria-label="Tải ảnh lên">
+        <h1 className="h1">Ảnh này có phải do AI tạo ra?</h1>
+        <p className="sub">Ngữ nghĩa, cấu trúc và tần số: ba góc nhìn, một bộ điều phối chia trọng số cho từng ảnh.</p>
 
-      <main>
-        <section className="wrap hero">
-          <h1>Ảnh này do AI tạo ra, hay là ảnh thật?</h1>
-          <p className="lead">
-            Tải một ảnh lên để AEGIS ước lượng khả năng ảnh do AI tạo ra, kèm mức độ chắc chắn và
-            cảnh báo khi kết quả đáng ngờ.
-          </p>
-        </section>
-
-        <section className="wrap demo" aria-label="Kiểm tra ảnh">
-          {!API_URL ? (
-            <div className="card err" role="alert">
-              <h2 className="h3">Thiếu cấu hình</h2>
-              <p>
-                Biến môi trường <code>NEXT_PUBLIC_AEGIS_API_URL</code> chưa được đặt nên trang không
-                biết gọi máy chủ nào. Xem <code>web/README.md</code> để cấu hình.
-              </p>
+        {!API_URL ? (
+          <div className="panel err" role="alert">
+            Chưa đặt biến <code>NEXT_PUBLIC_AEGIS_API_URL</code>.
+          </div>
+        ) : !file ? (
+          <div
+            className={`drop${drag ? " drag" : ""}`}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDrag(true);
+            }}
+            onDragLeave={() => setDrag(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDrag(false);
+              pick(e.dataTransfer.files?.[0]);
+            }}
+          >
+            <svg className="drop-ico" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="16" rx="3" />
+              <circle cx="9" cy="10" r="1.6" />
+              <path d="M21 16l-5-5-8 8" />
+            </svg>
+            <p className="drop-t">{drag ? "Thả ảnh để phân tích" : "Kéo ảnh vào đây"}</p>
+            <label className="btn" htmlFor="file">
+              Chọn ảnh
+            </label>
+            <input
+              id="file"
+              ref={inputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              className="sr"
+              onChange={(e) => pick(e.target.files?.[0])}
+            />
+            <p className="hint">JPEG · PNG · WebP · tối đa 10 MB</p>
+          </div>
+        ) : (
+          <div className="panel pv">
+            {preview && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img className="preview" src={preview} alt="Ảnh đã chọn" />
+            )}
+            <div className="pv-row">
+              <span className="fname" title={file.name}>
+                {file.name}
+              </span>
+              {loading ? (
+                <span className="loading" role="status" aria-live="polite">
+                  <span className="spin" aria-hidden="true" /> đang phân tích
+                </span>
+              ) : (
+                <button className="btn ghost" onClick={reset}>
+                  Ảnh khác
+                </button>
+              )}
             </div>
-          ) : (
-            <>
-              {server === "off" && !file && (
-                <p className="notice" role="note">
-                  Máy chủ demo hiện đang tắt (ngoài giờ demo). Bạn vẫn có thể chọn ảnh, nhưng kết
-                  quả chỉ có khi máy chủ hoạt động. Vui lòng quay lại trong giờ demo.
-                </p>
-              )}
+          </div>
+        )}
 
-              {!file && (
-                <div
-                  className={`drop${drag ? " drag" : ""}`}
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    setDrag(true);
-                  }}
-                  onDragLeave={() => setDrag(false)}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    setDrag(false);
-                    pick(e.dataTransfer.files?.[0]);
-                  }}
-                >
-                  <svg className="drop-ico" width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <rect x="3" y="4" width="18" height="16" rx="3" />
-                    <circle cx="9" cy="10" r="1.6" />
-                    <path d="M21 16l-5-5-8 8" />
-                  </svg>
-                  <p className="drop-t">{drag ? "Thả ảnh để bắt đầu" : "Kéo và thả ảnh vào đây"}</p>
-                  <p className="hint">hoặc</p>
-                  <label className="btn" htmlFor="file">
-                    Chọn ảnh từ thiết bị
-                  </label>
-                  <input
-                    id="file"
-                    ref={inputRef}
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    className="sr"
-                    onChange={(e) => pick(e.target.files?.[0])}
-                  />
-                  <p className="hint">JPEG, PNG hoặc WebP · tối đa 10 MB · cạnh ngắn nhất từ 224 px</p>
-                  <p className="hint">Ảnh được gửi nguyên bản, không bị nén hay thu nhỏ.</p>
-                </div>
+        {error && (
+          <div className="panel err" role="alert">
+            {error}
+            <div className="err-act">
+              {file && (
+                <button className="btn ghost" onClick={() => run(file)}>
+                  Thử lại
+                </button>
               )}
+              <button className="btn ghost" onClick={reset}>
+                Chọn ảnh khác
+              </button>
+            </div>
+          </div>
+        )}
+      </section>
 
-              {error && (
-                <div className="card err" role="alert">
-                  <strong>Lỗi:</strong> {error}
-                  {file && (
-                    <p>
-                      <button className="btn" onClick={() => run(file)}>
-                        Thử lại
-                      </button>
-                    </p>
-                  )}
-                </div>
-              )}
-
-              {preview && (
-                <div className="grid">
-                  <div className="card pv">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img className="preview" src={preview} alt="Ảnh bạn đã chọn" />
-                    <p className="fname" title={file?.name}>
-                      {file?.name}
-                    </p>
-                    {loading && (
-                      <p className="loading" role="status" aria-live="polite">
-                        <span className="spin" aria-hidden="true" /> Đang phân tích ảnh…
-                      </p>
-                    )}
-                    {!loading && (
-                      <button className="btn ghost" onClick={reset}>
-                        Kiểm tra ảnh khác
-                      </button>
-                    )}
-                  </div>
-                  <div>{result && <Result r={result} />}</div>
-                </div>
-              )}
-
-              {!preview && error && (
-                <p>
-                  <button className="btn ghost" onClick={reset}>
-                    Kiểm tra ảnh khác
-                  </button>
-                </p>
-              )}
-            </>
-          )}
-        </section>
-
-        {children}
-      </main>
-    </>
+      <section className="home-r" aria-live="polite" aria-label="Kết quả">
+        {result ? <Result r={result} /> : <Empty loading={loading} />}
+      </section>
+    </main>
   );
 }
 
-function Gauge({ p }: { p: number }) {
+function Empty({ loading }: { loading: boolean }) {
   return (
-    <svg className="gauge" viewBox="0 0 120 70" aria-hidden="true">
-      <path d="M10 62 A50 50 0 0 1 110 62" pathLength={100} className="g-track" />
-      <path d="M10 62 A50 50 0 0 1 110 62" pathLength={100} className="g-fill" strokeDasharray={`${Math.max(p * 100, 0.5)} 100`} />
-      <line x1="60" y1="6" x2="60" y2="16" className="g-mid" />
-    </svg>
+    <div className="panel result empty">
+      <div className="verdict">
+        <span className="big dim">{loading ? "…" : "—"}</span>
+        <span className="pval">p(ai) = –</span>
+      </div>
+      <div className="meter" aria-hidden="true" />
+      <Rows />
+      <p className="flag">{loading ? "đang chạy 3 chuyên gia" : "chưa có ảnh"}</p>
+    </div>
+  );
+}
+
+function Rows({ r }: { r?: PredictResponse }) {
+  return (
+    <div className="rows">
+      <div className="row head">
+        <span>chuyên gia</span>
+        <span>ý kiến p(ai)</span>
+        <span />
+        <span>trọng số</span>
+      </div>
+      {EXPERTS.map(({ key, name, role }) => {
+        const e = r?.experts[key];
+        return (
+          <div className="row" key={key}>
+            <span className="ename">
+              {name}
+              <small>{role}</small>
+            </span>
+            <span className="bar" aria-hidden="true">
+              <span style={{ width: e ? `${e.p_ai * 100}%` : 0 }} />
+            </span>
+            <span className="num">{e ? e.p_ai.toFixed(2) : "–"}</span>
+            <span className="num w">{e ? pct(e.weight) : "–"}</span>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
 function Result({ r }: { r: PredictResponse }) {
   const isAI = r.label === "AI";
-  const q = describeQuality(r.quality);
   return (
-    <div className="card result" aria-live="polite">
-      <div className={`verdict ${isAI ? "ai" : "real"}`}>
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          {isAI ? <path d="M12 3l2.2 5.6L20 11l-5.8 2.4L12 19l-2.2-5.6L4 11l5.8-2.4z" /> : <path d="M5 12.5l4.5 4.5L19 7.5" />}
-        </svg>
-        <span>{isAI ? "Nhiều khả năng là ảnh AI" : "Nhiều khả năng là ảnh thật"}</span>
-        <span className="tag" title="Độ tin cậy">{pct(r.confidence, 0)}</span>
+    <div className="panel result">
+      <div className="verdict">
+        <span className={`big ${isAI ? "ai" : "real"}`}>{isAI ? "AI" : "Ảnh thật"}</span>
+        <span className="pval">p(ai) = {r.p_ai.toFixed(3)}</span>
       </div>
-
-      <div className={`meter ${isAI ? "ai" : "real"}`}>
-        <Gauge p={r.p_ai} />
-        <div
-          className="m-val"
-          role="meter"
-          aria-label="Xác suất ảnh do AI tạo ra"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={Math.round(r.p_ai * 100)}
-        >
-          <strong>{pct(r.p_ai, 1)}</strong>
-          <span>xác suất ảnh do AI tạo ra</span>
-        </div>
-        <div className="scale" aria-hidden="true">
-          <span>0% Thật</span>
-          <span>100% AI</span>
-        </div>
+      <div
+        className="meter"
+        role="meter"
+        aria-label="Xác suất ảnh do AI tạo ra"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(r.p_ai * 100)}
+      >
+        <span className="needle" style={{ left: `${r.p_ai * 100}%` }} />
       </div>
-      {r.warning_flag && (
-        <div className="flag" role="alert">
-          <strong>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M12 3l10 18H2z" />
-              <path d="M12 10v5M12 18.2v.1" />
-            </svg>
-            Cờ vàng – hãy thận trọng với kết quả này
-          </strong>
-          <ul>
-            {r.flag_reasons.map((x) => (
-              <li key={x}>{REASON_TEXT[x] ?? x}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      <details className="more">
-      <summary>Xem chi tiết kỹ thuật</summary>
-      <h3 className="h3">Ý kiến của ba chuyên gia</h3>
-      <ul className="experts">
-        {EXPERTS.map(({ key, name }) => {
-          const e = r.experts[key];
-          return (
-            <li key={key}>
-              <div className="e-name">{name}</div>
-              <div className="e-line">
-                <span className="e-lbl">Khả năng AI</span>
-                <div className="track" aria-hidden="true">
-                  <div className="f-ai" style={{ width: pct(e.p_ai) }} />
-                </div>
-                <span className="e-num">{pct(e.p_ai)}</span>
-              </div>
-              <div className="e-line">
-                <span className="e-lbl">Trọng số</span>
-                <div className="track" aria-hidden="true">
-                  <div className="f-w" style={{ width: pct(e.weight) }} />
-                </div>
-                <span className="e-num">{e.weight.toFixed(2)}</span>
-              </div>
-            </li>
-          );
-        })}
-      </ul>
-
-      <h3 className="h3">Hồ sơ chất lượng ảnh</h3>
-      <ul className="quality">
-        {q.map((x) => (
-          <li key={x.k}>
-            <span className="q-k">{x.k}</span>
-            <strong className="q-v">{x.v}</strong>
-            <span className="q-d">{x.d}</span>
-          </li>
-        ))}
-      </ul>
-
-      <p className="meta">
-        Mô hình {r.model_version} · {r.latency_ms} ms
+      <div className="scale" aria-hidden="true">
+        <span>thật</span>
+        <span>0.5</span>
+        <span>AI</span>
+      </div>
+      <Rows r={r} />
+      <p className={`flag${r.warning_flag ? " on" : ""}`}>
+        {r.warning_flag
+          ? `cờ vàng: ${r.flag_reasons.map((x) => REASON_TEXT[x] ?? x).join(", ")}`
+          : "cờ vàng: tắt"}
       </p>
-      </details>
+      <p className="meta">
+        ood {r.ood_score.toFixed(2)} / {r.ood_threshold.toFixed(2)} · jpeg≈{r.quality.jpeg_quality_est.toFixed(0)} ·{" "}
+        {r.latency_ms} ms
+      </p>
     </div>
   );
 }
