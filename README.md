@@ -62,7 +62,7 @@ What they do not support: AEGIS does **not** beat a static learned weighting on 
 
 ## What We Achieved
 
-- **A complete, reproducible system**, from raw data to web demo: data audit → three experts → gating → few-shot adaptation → evaluation → FastAPI server → web frontend. Re-running the evaluation reproduces the results **byte for byte**; 128 automated tests.
+- **A complete, reproducible system**, from raw data to web demo: data audit → three experts → gating → few-shot adaptation → evaluation → FastAPI server → web frontend. Re-running the evaluation reproduces the results **byte for byte**; 160 automated tests.
 - **Found and measured a dataset shortcut** in GenImage (file format and size leak the label, 0.706 AUROC from image-quality features alone), reduced it to 0.63, and report the remainder as a `quality_only` floor instead of hiding it.
 - **Statistically significant, replicated gains** in two places: blur/resize (+0.013 AUROC over the strongest static ensemble) and few-shot adaptation to an unseen generator (+0.014 over a baseline given the same labelled samples).
 - **Showed that the gating behaves as designed**: weights move away from the expert that is failing under each degradation, and the system ends within ~0.01 AUROC of an oracle that knows the degradation in advance.
@@ -206,7 +206,7 @@ aegis-ai-forensics/
 ├── notebooks/               # Jupyter: data prep, experts/bundles, AEGIS evaluation, classic-ML comparison
 ├── web/                     # Next.js frontend (Vercel)
 ├── scripts/                 # data download, toy dataset, PDF→Markdown, server launcher
-├── tests/                   # 152 pytest tests
+├── tests/                   # 160 pytest tests
 └── data/, reports/          # images, caches, models, experiment outputs (generated, not in git)
 ```
 
@@ -298,7 +298,11 @@ python -m src.evaluation.ml_comparison --manifest $M --out reports/ml_comparison
 
 ## Web Demo
 
-A small demo lets people upload an image and see AEGIS's verdict, the expert weights and the yellow flag.
+The demo has three pages:
+
+- **Kiểm tra ảnh** (`/`): upload an image and see the verdict, each expert's opinion and weight, and the yellow flag.
+- **Bộ điều phối** (`/lab`): one held-out test image under four degradations (clean, two blur levels, JPEG Q40), showing how the gating weights move.
+- **Số liệu** (`/so-lieu`): test AUROC of AEGIS, its experts and the SVM / random forest / XGBoost baselines (numbers from `reports/ml_comparison`).
 
 ```text
 Browser ──► Vercel (web/, Next.js) ──► Cloudflare Tunnel ──► laptop: FastAPI + GPU (src/serving/)
@@ -309,6 +313,7 @@ Browser ──► Vercel (web/, Next.js) ──► Cloudflare Tunnel ──► l
   `.\scripts\serve.ps1 -Origins "https://<your-app>.vercel.app" -RateLimit 300 -MaxWaiting 64`
 - **Expose it:** `cloudflared tunnel --url http://localhost:8000`
 - **Frontend:** import the repo on Vercel with Root Directory `web` and set `NEXT_PUBLIC_AEGIS_API_URL` to the tunnel URL. See [`web/README.md`](web/README.md).
+- **After each restart:** a quick tunnel gets a new URL every time it starts. Set the new URL in `NEXT_PUBLIC_AEGIS_API_URL` and redeploy on Vercel, because the value is built into the frontend.
 
 API details: [`docs/WEB_API_CONTRACT.md`](docs/WEB_API_CONTRACT.md).
 

@@ -6,6 +6,8 @@ Shared contract between the inference server (`src/serving/`, runs on the team l
 - **No storage.** Uploaded images are processed in memory and discarded. The server never writes images, filenames, or per-image results to disk or logs. Logs contain only status code, latency and an anonymous request counter.
 - **Inference host:** the team laptop (RTX 4060) exposed through a Cloudflare Tunnel. Vercel hosts only the frontend.
 - **Audience:** ~150 users, deadline 1 week. Users may upload any real or AI image, edited with any tool.
+  *Superseded 2026-11-23:* the demo is used for the project defense; the Lab page (below) is the main demo and the
+  upload page stays available for anyone given the link.
 - **Model:** head variant `aug`, Expert 3 = SRM, fusion `prob`, cache version `v2` (the v3 configuration in `docs/PROJECT_BRIEF.md` §10).
 
 ## Endpoints

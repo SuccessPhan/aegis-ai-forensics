@@ -1,6 +1,6 @@
-# AEGIS - data-layer dependencies (work package #1).
-# NOTE: torch / torchvision / open_clip / transformers (expert backbones, gating) are NOT listed yet;
-# they will be added by the expert/gating work packages.
+# AEGIS - Python dependencies (developed on Python 3.14).
+# Install torch / torchvision with the CUDA 12.8 index first (see the note below), then: pip install -r requirements.txt
+# Data layer:
 numpy
 pillow
 scipy
